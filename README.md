@@ -40,9 +40,3 @@ python -m slopgate.cli \
 - `docs/` — milestone report and contribution notes.
 - `tests/` — unit tests and regression checks.
 - `requirements.txt` — Python dependencies.
-
-## Contribution scope
-
-This milestone implementation is scoped to the claim extraction and evidence representation contribution for Khwahish Patel.
-
-Further detail is recorded in `docs/team_contributions.md` and `docs/milestone2_report.md`.
