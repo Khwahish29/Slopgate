@@ -1,0 +1,151 @@
+{
+ "target_repo": "corpus/d0/target_repo",
+ "labeling_protocol": "docs/labeling_protocol.md",
+ "items": [
+  {
+   "file": "t1_a.md",
+   "tier": "T1",
+   "label": "HALLUCINATED",
+   "primary_symbol": "curl_easy_parse_header",
+   "synthetic": true
+  },
+  {
+   "file": "t1_b.md",
+   "tier": "T1",
+   "label": "HALLUCINATED",
+   "primary_symbol": "http_state_release",
+   "synthetic": true
+  },
+  {
+   "file": "t1_c.md",
+   "tier": "T1",
+   "label": "HALLUCINATED",
+   "primary_symbol": "url_normalize_percent",
+   "synthetic": true
+  },
+  {
+   "file": "t1_d.md",
+   "tier": "T1",
+   "label": "HALLUCINATED",
+   "primary_symbol": "chunk_log_error",
+   "synthetic": true
+  },
+  {
+   "file": "t2_a.md",
+   "tier": "T2",
+   "label": "HALLUCINATED",
+   "primary_symbol": "curl_easy_parse_header",
+   "synthetic": true
+  },
+  {
+   "file": "t2_b.md",
+   "tier": "T2",
+   "label": "HALLUCINATED",
+   "primary_symbol": "curl_easy_parse_header",
+   "synthetic": true
+  },
+  {
+   "file": "t3_a.md",
+   "tier": "T3",
+   "label": "NOT_HALLUCINATED",
+   "primary_symbol": "url_legacy_unescape",
+   "synthetic": true
+  },
+  {
+   "file": "t3_b.md",
+   "tier": "T3",
+   "label": "NOT_HALLUCINATED",
+   "primary_symbol": "url_legacy_unescape",
+   "synthetic": true
+  },
+  {
+   "file": "t4_a.md",
+   "tier": "T4",
+   "label": "NOT_HALLUCINATED",
+   "primary_symbol": "chunk_decode",
+   "synthetic": true
+  },
+  {
+   "file": "t4_b.md",
+   "tier": "T4",
+   "label": "NOT_HALLUCINATED",
+   "primary_symbol": "chunk_read_size",
+   "synthetic": true
+  },
+  {
+   "file": "t4_c.md",
+   "tier": "T4",
+   "label": "NOT_HALLUCINATED",
+   "primary_symbol": "url_parse_host",
+   "synthetic": true
+  },
+  {
+   "file": "t4_d.md",
+   "tier": "T4",
+   "label": "NOT_HALLUCINATED",
+   "primary_symbol": "chunk_decode",
+   "synthetic": true
+  },
+  {
+   "file": "t4_e.md",
+   "tier": "T4",
+   "label": "NOT_HALLUCINATED",
+   "primary_symbol": "chunk_decode",
+   "synthetic": true
+  },
+  {
+   "file": "t5_a.md",
+   "tier": "T5",
+   "label": "HALLUCINATED",
+   "primary_symbol": "chunk_decode",
+   "synthetic": true,
+   "generator": "slopforge",
+   "forged_claim": "chunk_decode is defined in lib/http_chunks.c, not lib/url.c"
+  },
+  {
+   "file": "t5_b.md",
+   "tier": "T5",
+   "label": "HALLUCINATED",
+   "primary_symbol": "chunk_read_size",
+   "synthetic": true,
+   "generator": "slopforge",
+   "forged_claim": "chunk_read_size is defined in lib/http_chunks.c, not lib/url.c"
+  },
+  {
+   "file": "t5_c.md",
+   "tier": "T5",
+   "label": "HALLUCINATED",
+   "primary_symbol": "chunk_read_size",
+   "synthetic": true,
+   "generator": "slopforge",
+   "forged_claim": "chunk_read_size is defined in lib/http_chunks.c, not src/main.c"
+  },
+  {
+   "file": "t5_d.md",
+   "tier": "T5",
+   "label": "HALLUCINATED",
+   "primary_symbol": "hexval",
+   "synthetic": true,
+   "generator": "slopforge",
+   "forged_claim": "hexval is defined in lib/http_chunks.c, not lib/url.c"
+  },
+  {
+   "file": "t5_e.md",
+   "tier": "T5",
+   "label": "HALLUCINATED",
+   "primary_symbol": "hexval",
+   "synthetic": true,
+   "generator": "slopforge",
+   "forged_claim": "hexval is defined in lib/http_chunks.c, not src/main.c"
+  },
+  {
+   "file": "t5_f.md",
+   "tier": "T5",
+   "label": "HALLUCINATED",
+   "primary_symbol": "url_legacy_unescape",
+   "synthetic": true,
+   "generator": "slopforge",
+   "forged_claim": "url_legacy_unescape is defined in lib/url.c, not lib/http_chunks.c"
+  }
+ ]
+}
