@@ -1,0 +1,62 @@
+{
+  "name": "minicfg",
+  "project": "minicfg",
+  "description": "INI-style configuration reader: line lexer, section/pair parser and a linked-list store (src/cfgdump.c).",
+  "versions": [
+    {"tag": "minicfg-1_0", "label": "1.0", "overlay": "v1_0", "date": "2024-03-05T14:00:00+00:00",
+     "message": "minicfg 1.0"},
+    {"tag": "minicfg-1_1", "label": "1.1", "overlay": null, "date": "2024-08-19T14:00:00+00:00",
+     "message": "minicfg 1.1: remove @include support"}
+  ],
+  "functions": {
+    "cfg_trim": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-127", "anchor": "e = s + strlen(s) - 1;", "title": "Buffer under-read in {fn}()",
+       "summary": "For an empty or all-blank line, `{fn}()` sets `e` one byte before the string and keeps walking backwards while the bytes look like whitespace.",
+       "poc": "Load a file whose first line is three spaces."}]},
+    "cfg_read_line": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-787", "anchor": "out[n] = 0;", "title": "Out-of-bounds write in {fn}()",
+       "summary": "`{fn}()` stops copying at `outlen` but keeps counting, then writes the terminator at `out[n]`, which is past the buffer for any line longer than `outlen`.",
+       "poc": "A 600-byte line with no newline."}]},
+    "cfg_unquote": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-124", "anchor": "s[n - 2] = 0;", "title": "Buffer underwrite in {fn}()",
+       "summary": "`{fn}()` assumes a closing quote exists; for the one-character value \" it writes a NUL at `s[-1]`.",
+       "poc": "key = \""}]},
+    "cfg_parse_section": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-787", "anchor": "memcpy(c->section, line + 1, (size_t)(end - line - 1));", "title": "Section name overflow in {fn}()",
+       "summary": "`{fn}()` copies the section name into a 64-byte field without comparing its length to CFG_MAX_KEY.",
+       "poc": "A [section] header with a 200-character name."}]},
+    "cfg_parse_pair": {"kind": "reachable", "bugs": []},
+    "cfg_load": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-787", "anchor": "while(cfg_read_line(&cur, line, sizeof(line))) {", "title": "Long lines corrupt the stack in {fn}()",
+       "summary": "`{fn}()` reads each line into a 512-byte stack buffer, and the line reader writes its terminator past that buffer for longer lines.",
+       "poc": "Load a file with a 2000-byte value."}]},
+    "cfg_set": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-122", "anchor": "strcpy(e->key, key);", "title": "Heap overflow on long keys in {fn}()",
+       "summary": "`{fn}()` copies the key into a fixed 64-byte field of a heap entry with strcpy, so a long key overflows the allocation.",
+       "poc": "AAAA...(100 bytes) = 1"}]},
+    "cfg_get": {"kind": "reachable", "bugs": []},
+    "cfg_free": {"kind": "reachable", "bugs": []},
+    "cfg_expand_env": {"kind": "dead", "bugs": [
+      {"cwe": "CWE-121", "anchor": "memcpy(name, value + 2, n);", "title": "Stack overflow in {fn}()",
+       "summary": "`{fn}()` copies the variable name up to the closing brace into a 64-byte stack buffer without a length check.",
+       "poc": "Expand ${AAAA...} with a 300-character name."}]}
+  },
+  "removed": {
+    "cfg_include_file": {"in_label": "1.0", "bugs": [
+      {"cwe": "CWE-193", "anchor": "buf[n] = 0;", "title": "Off-by-one write in {fn}()",
+       "summary": "`{fn}()` reads up to sizeof(buf) bytes and then writes the terminator at `buf[n]`, one past the end when the included file fills the buffer.",
+       "poc": "@include a file of exactly 4096 bytes."}]}
+  },
+  "decoys": {
+    "cfg_merge_files": {"where": "comment", "file": "lib/cfg_parse.c"},
+    "cfg_validate_key": {"where": "string", "file": "lib/cfg_parse.c"},
+    "cfg_watch_reload": {"where": "docs", "file": "docs/README.md"}
+  },
+  "vocab": {
+    "prefix": "cfg_",
+    "verbs": ["parse", "expand", "resolve", "split", "escape", "dup", "lookup", "merge", "strip", "intern"],
+    "nouns": ["value", "section", "key", "quote", "comment", "include", "path", "env", "line", "table"],
+    "fake_files": ["lib/cfg_env.c", "lib/cfg_include.c", "src/cfgcheck.c"],
+    "fake_versions": ["2.0", "1.2.3", "0.9"]
+  }
+}

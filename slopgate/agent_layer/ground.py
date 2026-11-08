@@ -12,6 +12,8 @@ a grep-based baseline confidently wrong.
 import os
 import re
 
+from . import ts_ground
+
 SOURCE_EXT = {".c", ".h", ".py", ".go", ".js", ".ts"}
 ENTRY_HINTS = ("main", "int main")
 
@@ -54,10 +56,44 @@ DEF_PATTERNS = [
 ]
 
 
+REGEX_CHECKED_BY = "regex definition scan with comment/string stripping"
+
+
+def parser_mode():
+    """'treesitter' or 'regex', from SLOPGATE_PARSER = regex (default) | treesitter | auto.
+    Opt-in until the team switches the default at integration; treesitter and auto both fall
+    back to regex when tree-sitter is not installed."""
+    want = os.environ.get("SLOPGATE_PARSER", "regex").strip().lower()
+    if want not in ("treesitter", "auto"):
+        return "regex"
+    return "treesitter" if ts_ground.available() else "regex"
+
+
+def _scan_regex(src, rel, sym):
+    """The original line-regex scan for one file -> (mentions, definitions, callers)."""
+    mentions, defs, callers = [], [], []
+    code = strip_comments(src)
+    code_lines = code.splitlines()
+    for i, line in enumerate(src.splitlines(), 1):
+        if sym in line:
+            in_code = i <= len(code_lines) and sym in code_lines[i - 1]
+            mentions.append({"file": rel, "line": i, "in_code": in_code})
+    for pat in DEF_PATTERNS:
+        for m in re.finditer(pat.format(sym=re.escape(sym)), code, re.M):
+            defs.append({"file": rel,
+                         "line": code[:m.start()].count("\n") + 1})
+    for m in re.finditer(r"\b%s\s*\(" % re.escape(sym), code):
+        ln = code[:m.start()].count("\n") + 1
+        if not any(d["file"] == rel and abs(d["line"] - ln) < 1 for d in defs):
+            callers.append({"file": rel, "line": ln})
+    return mentions, defs, callers
+
+
 def find_symbol(repo, sym):
     """Return a grounding record for one symbol."""
     mentions, defs, callers = [], [], []
     files = list(walk_sources(repo))
+    mode, n_regex = parser_mode(), 0
     for path in files:
         try:
             src = open(path, encoding="utf-8", errors="replace").read()
@@ -66,21 +102,19 @@ def find_symbol(repo, sym):
         if sym not in src:
             continue
         rel = os.path.relpath(path, repo)
-        code = strip_comments(src)
-        code_lines = code.splitlines()
-        for i, line in enumerate(src.splitlines(), 1):
-            if sym in line:
-                in_code = i <= len(code_lines) and sym in code_lines[i - 1]
-                mentions.append({"file": rel, "line": i, "in_code": in_code})
-        for pat in DEF_PATTERNS:
-            for m in re.finditer(pat.format(sym=re.escape(sym)), code, re.M):
-                defs.append({"file": rel,
-                             "line": code[:m.start()].count("\n") + 1})
-        for m in re.finditer(r"\b%s\s*\(" % re.escape(sym), code):
-            ln = code[:m.start()].count("\n") + 1
-            if not any(d["file"] == rel and abs(d["line"] - ln) < 1 for d in defs):
-                callers.append({"file": rel, "line": ln})
+        if mode == "treesitter" and path.endswith(ts_ground.TS_EXT):
+            m, d, c = ts_ground.scan(src, rel, sym)
+        else:
+            m, d, c = _scan_regex(src, rel, sym)
+            n_regex += 1
+        mentions += m
+        defs += d
+        callers += c
     status = "DEFINED" if defs else ("MENTIONED" if mentions else "ABSENT")
+    if mode == "regex":
+        checked_by = REGEX_CHECKED_BY
+    else:
+        checked_by = ts_ground.CHECKED_BY + ("; regex scan for %d non-C file(s)" % n_regex if n_regex else "")
     return {
         "symbol": sym,
         "status": status,
@@ -89,7 +123,7 @@ def find_symbol(repo, sym):
         "code_mentions": sum(1 for m in mentions if m["in_code"]),
         "callers": callers,
         "files_searched": len(files),
-        "checked_by": "regex definition scan with comment/string stripping",
+        "checked_by": checked_by,
     }
 
 
@@ -135,6 +169,8 @@ def _enclosing_function(repo, relpath, line):
                    errors="replace").read()
     except OSError:
         return None
+    if parser_mode() == "treesitter" and relpath.endswith(ts_ground.TS_EXT):
+        return ts_ground.enclosing_function(src, line)
     code = strip_comments(src).splitlines()
     for i in range(min(line, len(code)) - 1, -1, -1):
         m = re.match(r"^(?:static\s+|inline\s+)?[\w \*]*?\b([A-Za-z_]\w*)\s*\("

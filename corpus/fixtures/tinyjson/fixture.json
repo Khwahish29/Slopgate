@@ -1,0 +1,223 @@
+{
+  "name": "tinyjson",
+  "project": "tinyjson",
+  "description": "Small recursive-descent JSON parser with a value tree and a CLI (src/jsoncat.c).",
+  "versions": [
+    {
+      "tag": "tinyjson-1_0",
+      "label": "1.0",
+      "overlay": "v1_0",
+      "date": "2024-01-15T10:00:00+00:00",
+      "message": "tinyjson 1.0"
+    },
+    {
+      "tag": "tinyjson-1_1",
+      "label": "1.1",
+      "overlay": null,
+      "date": "2024-06-03T10:00:00+00:00",
+      "message": "tinyjson 1.1: drop the non-standard comment skipper"
+    }
+  ],
+  "functions": {
+    "json_skip_ws": {
+      "kind": "reachable",
+      "bugs": []
+    },
+    "json_lex_string": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-787",
+          "anchor": "out[n++] = c;",
+          "title": "Heap buffer overflow in {fn}()",
+          "summary": "`{fn}()` copies characters into `out` without comparing `n` against `outlen`, so a string longer than the caller's buffer writes past its end.",
+          "poc": "Parse {\"k\": \"AAAA...\"} with a 4096-byte string value."
+        },
+        {
+          "cwe": "CWE-125",
+          "anchor": "c = lx->p[0];",
+          "title": "Read past end of input in {fn}()",
+          "summary": "When a string ends in a lone backslash, `{fn}()` reads the escaped character without checking that one byte remains.",
+          "poc": "Parse the 3-byte input \"\\ with no closing quote."
+        }
+      ]
+    },
+    "json_lex_number": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-121",
+          "anchor": "buf[n++] = *lx->p++;",
+          "title": "Stack buffer overflow in {fn}()",
+          "summary": "`{fn}()` accumulates digits into a 64-byte stack buffer with no length limit, so a long numeric literal overwrites the stack.",
+          "poc": "Parse a number literal of 200 digits."
+        }
+      ]
+    },
+    "json_value_free": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-674",
+          "anchor": "json_value_free(v->items[i]);",
+          "title": "Uncontrolled recursion in {fn}()",
+          "summary": "`{fn}()` frees nested arrays recursively with no depth bound, so a deeply nested document exhausts the stack on cleanup.",
+          "poc": "Parse 100000 nested '[' characters and free the result."
+        }
+      ]
+    },
+    "json_array_push": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-190",
+          "anchor": "json_value **n = realloc(arr->items, ncap * sizeof(*n));",
+          "title": "Integer overflow in {fn}() growth",
+          "summary": "`{fn}()` doubles the capacity and multiplies by the element size without an overflow check, so the reallocation can be smaller than the index later written.",
+          "poc": "Grow an array past 2^60 elements on a 64-bit build (or 2^29 on 32-bit)."
+        }
+      ]
+    },
+    "json_object_set": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-476",
+          "anchor": "obj->keys[obj->count] = strdup(key);",
+          "title": "NULL pointer dereference in {fn}()",
+          "summary": "`{fn}()` stores the result of strdup without checking it, and the key array is later read as if every slot were valid.",
+          "poc": "Parse a large object under an allocator that fails after N allocations."
+        }
+      ]
+    },
+    "json_parse_array": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-125",
+          "anchor": "if(*lx->p == ',')",
+          "title": "Out-of-bounds read in {fn}()",
+          "summary": "After skipping whitespace, `{fn}()` reads `*lx->p` without checking that the cursor is still inside the input.",
+          "poc": "Parse the truncated input [1, ending right after the number."
+        }
+      ]
+    },
+    "json_parse_object": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-121",
+          "anchor": "if(json_lex_string(lx, key, sizeof(key)) < 0)",
+          "title": "Stack overflow via object keys in {fn}()",
+          "summary": "`{fn}()` lexes keys into a 256-byte stack array, but the lexer ignores the length it is given, so a long key overflows the stack frame.",
+          "poc": "Parse an object whose key is 1000 bytes long."
+        }
+      ]
+    },
+    "json_parse_value": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-125",
+          "anchor": "memcpy(v->string, tmp, n + 1);",
+          "title": "Over-read when copying strings in {fn}()",
+          "summary": "`{fn}()` copies `n + 1` bytes from the temporary buffer, but the terminator is only written when `n` is below the buffer size.",
+          "poc": "Parse a string value of exactly 256 bytes."
+        }
+      ]
+    },
+    "json_parse": {
+      "kind": "reachable",
+      "bugs": [
+        {
+          "cwe": "CWE-674",
+          "anchor": "lx.depth = 0;",
+          "title": "Unbounded nesting depth in {fn}()",
+          "summary": "`{fn}()` initialises a depth counter that nothing ever checks, so recursion depth is controlled entirely by the input.",
+          "poc": "Parse 1e6 nested '{\"a\":' prefixes."
+        }
+      ]
+    },
+    "json_value_new": {
+      "kind": "reachable",
+      "bugs": []
+    },
+    "json_unescape_utf16": {
+      "kind": "dead",
+      "bugs": [
+        {
+          "cwe": "CWE-787",
+          "anchor": "out[1] = (char)(0x80 | (v & 0x3F));",
+          "title": "Truncated UTF-8 encoding overflow in {fn}()",
+          "summary": "`{fn}()` writes a two-byte sequence for every code point above 0x7F, silently truncating values that need three bytes and writing past one-byte output buffers.",
+          "poc": "Call it with \"20AC\" and a 1-byte output buffer."
+        }
+      ]
+    }
+  },
+  "removed": {
+    "json_lex_comment": {
+      "in_label": "1.0",
+      "bugs": [
+        {
+          "cwe": "CWE-125",
+          "anchor": "while(lx->p[0] != '*' || lx->p[1] != '/')",
+          "title": "Unterminated comment read overrun in {fn}()",
+          "summary": "`{fn}()` scans for the closing */ without checking the end pointer, so an unterminated comment reads past the input buffer.",
+          "poc": "Parse the input [1 /* with no closing delimiter."
+        }
+      ]
+    }
+  },
+  "decoys": {
+    "json_parse_bignum": {
+      "where": "comment",
+      "file": "lib/json_parse.c"
+    },
+    "json_validate_utf8": {
+      "where": "string",
+      "file": "lib/json_parse.c"
+    },
+    "json_stream_reset": {
+      "where": "docs",
+      "file": "docs/CHANGELOG.md"
+    }
+  },
+  "vocab": {
+    "prefix": "json_",
+    "verbs": [
+      "decode",
+      "unescape",
+      "read",
+      "copy",
+      "scan",
+      "expand",
+      "normalize",
+      "flush",
+      "emit",
+      "resize"
+    ],
+    "nouns": [
+      "surrogate",
+      "escape",
+      "token",
+      "key",
+      "buffer",
+      "number",
+      "exponent",
+      "codepoint",
+      "stream",
+      "depth"
+    ],
+    "fake_files": [
+      "lib/json_utf8.c",
+      "lib/json_stream.c",
+      "src/json_tool.c"
+    ],
+    "fake_versions": [
+      "2.0",
+      "1.3.1",
+      "0.8"
+    ]
+  }
+}

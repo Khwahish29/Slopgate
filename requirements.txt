@@ -1,2 +1,7 @@
-# No external dependencies are required for the milestone scaffold.
-# The project uses Python standard-library functionality only.
+# The core system uses the Python standard library only.
+#
+# Optional: tree-sitter grounding for C (slopgate/agent_layer/ts_ground.py), used when
+# SLOPGATE_PARSER=treesitter (or auto). The default, regex, is the original scan and needs neither.
+# Pinned to versions that support Python 3.9.
+tree-sitter==0.23.2
+tree-sitter-c==0.23.4
