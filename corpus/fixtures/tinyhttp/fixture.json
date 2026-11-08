@@ -1,0 +1,61 @@
+{
+  "name": "tinyhttp",
+  "project": "tinyhttp",
+  "style": "curl",
+  "description": "HTTP/1.1 header and chunked-body reader written in curl's coding style: return type on its own line, function-like macros, static prototypes (src/httpd_min.c).",
+  "versions": [
+    {"tag": "tinyhttp-1_0", "label": "1.0", "overlay": "v1_0", "date": "2024-04-08T08:00:00+00:00",
+     "message": "tinyhttp 1.0"},
+    {"tag": "tinyhttp-1_1", "label": "1.1", "overlay": null, "date": "2024-09-30T08:00:00+00:00",
+     "message": "tinyhttp 1.1: drop obsolete header line folding"}
+  ],
+  "functions": {
+    "hdr_parse_line": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-787", "anchor": "h = &req->hdrs[req->nhdrs++];", "title": "Header array overflow in {fn}()",
+       "summary": "`{fn}()` appends to the fixed array of HTTP_MAX_HDRS headers without checking `nhdrs`, so the 33rd header line writes past the array inside the request struct.",
+       "poc": "Send a request with 40 header lines."},
+      {"cwe": "CWE-121", "anchor": "memcpy(h->name, line, nlen);", "title": "Header name overflow in {fn}()",
+       "summary": "`{fn}()` copies the header name into a 64-byte field using the distance to the colon, with no upper bound.",
+       "poc": "Send a header whose name is 300 bytes long."}]},
+    "hdr_is_ws": {"kind": "macro", "bugs": [
+      {"cwe": "CWE-125", "anchor": "#define hdr_is_ws(c)", "title": "Unbounded whitespace skip using {fn}()",
+       "summary": "`{fn}()` is used in a loop that skips blanks after the colon without any length bound, so a header line that ends in blanks is read past its end.",
+       "poc": "Send 'X:' followed by spaces up to the end of the buffer with no newline."}]},
+    "hdr_value_len": {"kind": "reachable", "bugs": []},
+    "chunk_hexval": {"kind": "reachable", "bugs": []},
+    "chunk_read_size": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-190", "anchor": "v = v * 16 + (size_t)chunk_hexval(p[i]);", "title": "Chunk size integer overflow in {fn}()",
+       "summary": "`{fn}()` accumulates hex digits into a size_t with no overflow check, so a 17-digit chunk size wraps to a small value.",
+       "poc": "Send the chunk header 10000000000000010."}]},
+    "chunk_decode": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-787", "anchor": "memcpy(req->body + req->body_len, buf + used + 2, size);", "title": "Body buffer overflow in {fn}()",
+       "summary": "`{fn}()` copies the declared chunk size into the fixed 8192-byte body without comparing it to the space left or to the bytes actually received.",
+       "poc": "Send the chunk header ffff followed by 10 bytes."}]},
+    "req_feed": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-125", "anchor": "return chunk_decode(req, eol + 1, (size_t)(end - eol - 1));", "title": "Over-read on the header/body boundary in {fn}()",
+       "summary": "`{fn}()` hands everything after the blank line to the chunk decoder, which then trusts a size taken from that data.",
+       "poc": "End the headers and send a chunk size larger than the rest of the input."}]},
+    "req_dump_debug": {"kind": "dead", "bugs": [
+      {"cwe": "CWE-120", "anchor": "strcat(out, req->hdrs[i].name);", "title": "Unbounded strcat in {fn}()",
+       "summary": "`{fn}()` concatenates every header name into `out` with strcat and no size, so many headers overflow the caller's buffer.",
+       "poc": "Dump a request with 32 long header names into a 256-byte buffer."}]}
+  },
+  "removed": {
+    "req_legacy_fold": {"in_label": "1.0", "bugs": [
+      {"cwe": "CWE-787", "anchor": "struct http_hdr *h = &req->hdrs[req->nhdrs - 1];", "title": "Out-of-bounds write in {fn}()",
+       "summary": "When the first header line starts with a blank, `{fn}()` folds it into `hdrs[-1]`, writing before the header array.",
+       "poc": "Send a request whose first header line begins with a space."}]}
+  },
+  "decoys": {
+    "req_parse_headers": {"where": "comment", "file": "lib/req.c"},
+    "http_check_header_name": {"where": "string", "file": "lib/hdr.c"},
+    "http_set_proxy": {"where": "docs", "file": "docs/TODO.md"}
+  },
+  "vocab": {
+    "prefix": ["hdr_", "chunk_", "req_", "http_"],
+    "verbs": ["parse", "unfold", "copy", "read", "split", "decode", "lower", "scan", "trim", "append"],
+    "nouns": ["token", "value", "trailer", "extension", "cookie", "host", "line", "size", "crlf", "field"],
+    "fake_files": ["lib/cookie.c", "lib/trailer.c", "src/httpd_full.c"],
+    "fake_versions": ["2.2", "1.1.5", "0.9"]
+  }
+}

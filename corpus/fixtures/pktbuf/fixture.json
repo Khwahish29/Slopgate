@@ -1,0 +1,67 @@
+{
+  "name": "pktbuf",
+  "project": "pktbuf",
+  "description": "Growable packet buffer, TLV record decoder and a handler table dispatched through function pointers (src/pktd.c).",
+  "versions": [
+    {"tag": "pktbuf-1_0", "label": "1.0", "overlay": "v1_0", "date": "2024-02-10T09:30:00+00:00",
+     "message": "pktbuf 1.0"},
+    {"tag": "pktbuf-1_1", "label": "1.1", "overlay": null, "date": "2024-07-22T09:30:00+00:00",
+     "message": "pktbuf 1.1: remove one-byte legacy framing"}
+  ],
+  "functions": {
+    "buf_init": {"kind": "reachable", "bugs": []},
+    "buf_reserve": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-190", "anchor": "size_t need = b->len + extra;", "title": "Integer overflow in {fn}()",
+       "summary": "`{fn}()` adds the requested size to the current length without an overflow check, so a huge request wraps `need` to a small value and the buffer is not grown.",
+       "poc": "Call buf_append() with n = SIZE_MAX - 8 on a buffer holding 16 bytes."}]},
+    "buf_append": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-787", "anchor": "memcpy(b->data + b->len, src, n);", "title": "Heap overflow in {fn}()",
+       "summary": "`{fn}()` trusts `buf_reserve()` to have grown the buffer, but when the size computation wraps the memcpy writes past the allocation.",
+       "poc": "Append a record whose declared length makes len + n wrap around."}]},
+    "buf_consume": {"kind": "dead", "bugs": [
+      {"cwe": "CWE-125", "anchor": "memcpy(dst, b->data + b->off, n);", "title": "Out-of-bounds read in {fn}()",
+       "summary": "`{fn}()` copies `n` bytes from the read cursor without checking that `off + n` stays within `len`.",
+       "poc": "Consume 64 bytes from a buffer that holds 8."}]},
+    "buf_free": {"kind": "reachable", "bugs": []},
+    "tlv_read_u16": {"kind": "reachable", "bugs": []},
+    "tlv_next": {"kind": "reachable", "bugs": [
+      {"cwe": "CWE-125", "anchor": "t->value = p + 4;", "title": "Unchecked record length in {fn}()",
+       "summary": "`{fn}()` takes the 16-bit record length from the wire and never compares it with the bytes remaining, so handlers read `t->len` bytes past the end of the buffer.",
+       "poc": "Send a 6-byte frame 00 01 ff ff 41 41."},
+      {"cwe": "CWE-191", "anchor": "if(b->len - b->off < 4)", "title": "Integer underflow in {fn}() bounds check",
+       "summary": "Once a bogus record length pushes `off` past `len`, the unsigned subtraction in `{fn}()` wraps and the next iteration parses memory beyond the buffer.",
+       "poc": "Two frames, the first declaring a length larger than the data that follows."}]},
+    "tlv_dump_hex": {"kind": "dead", "bugs": [
+      {"cwe": "CWE-787", "anchor": "sprintf(out + i * 2, \"%02x\", t->value[i]);", "title": "Unbounded hex dump in {fn}()",
+       "summary": "`{fn}()` writes 2 * len + 1 bytes into `out` without taking the output size, so any long record overflows the caller's buffer.",
+       "poc": "Dump a 300-byte record into a 64-byte buffer."}]},
+    "dispatch_packet": {"kind": "reachable", "bugs": []},
+    "on_ping": {"kind": "callback", "bugs": [
+      {"cwe": "CWE-125", "anchor": "return buf_append(out, t->value, t->len);", "title": "Over-read when echoing ping payload in {fn}()",
+       "summary": "The ping handler `{fn}()` echoes `t->len` bytes from `t->value`, and that length was never validated against the received frame.",
+       "poc": "Send a type-1 record that declares 4000 bytes but carries 2."}]},
+    "on_data": {"kind": "callback", "bugs": [
+      {"cwe": "CWE-121", "anchor": "memcpy(body, t->value + 4, t->len - 4);", "title": "Stack buffer overflow in {fn}()",
+       "summary": "The data handler `{fn}()` copies `t->len - 4` bytes into a 512-byte stack array; a record longer than 516 bytes overflows it, and one shorter than 4 underflows the size.",
+       "poc": "Send a type-2 record with length 2000."}]},
+    "on_close": {"kind": "callback", "bugs": []}
+  },
+  "removed": {
+    "tlv_read_legacy_len": {"in_label": "1.0", "bugs": [
+      {"cwe": "CWE-125", "anchor": "b->off += 2 + t->len;", "title": "Out-of-bounds read in legacy framing {fn}()",
+       "summary": "`{fn}()` reads the type and one-byte length and advances the cursor without checking that any of those bytes are present.",
+       "poc": "Send a single byte 0x81 as the whole stream."}]}
+  },
+  "decoys": {
+    "buf_shrink_to_fit": {"where": "comment", "file": "lib/buf.c"},
+    "tlv_validate_crc": {"where": "string", "file": "lib/dispatch.c"},
+    "pkt_set_mtu": {"where": "docs", "file": "docs/NOTES.md"}
+  },
+  "vocab": {
+    "prefix": ["buf_", "tlv_", "pkt_"],
+    "verbs": ["parse", "read", "copy", "grow", "split", "merge", "reset", "peek", "decode", "align"],
+    "nouns": ["header", "payload", "frame", "record", "cursor", "chunk", "window", "length", "checksum", "segment"],
+    "fake_files": ["lib/frame.c", "lib/crc.c", "src/pktctl.c"],
+    "fake_versions": ["2.1", "1.4.0", "0.7"]
+  }
+}
