@@ -1,5 +1,7 @@
 # SlopGate
 
+[![tests](https://github.com/Khwahish29/Slopgate/actions/workflows/tests.yml/badge.svg)](https://github.com/Khwahish29/Slopgate/actions/workflows/tests.yml)
+
 SlopGate is an evidence-first triage assistant for AI-generated vulnerability reports. It sanitizes report text, extracts concrete claims, checks them against a repository checkout and ref, and produces a grounded verdict with supporting evidence.
 
 ## Project status
