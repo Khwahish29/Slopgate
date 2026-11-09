@@ -17,6 +17,7 @@ Optional dependency. If tree_sitter / tree_sitter_c are not installed, available
 ground.py keeps using the regex scan. Selected by SLOPGATE_PARSER = regex (default) | treesitter | auto.
 """
 import hashlib
+import re
 
 try:                                              # pragma: no cover - import guard
     import tree_sitter
@@ -105,15 +106,14 @@ def scan(src, rel, sym):
     def in_code(pos):
         return not any(s <= pos and pos + len(sb) <= e for s, e in non_code)
 
+    # Whole-identifier matches only: Curl_ldap_err2string must not count as a mention of the
+    # real Curl_ldap_err2string_a (D2, HackerOne 3418528), or an invented name looks "used in code".
+    word = re.compile(rb"(?<![A-Za-z0-9_])" + re.escape(sb) + rb"(?![A-Za-z0-9_])")
     mentions, off = [], 0
     for i, line in enumerate(b.split(b"\n"), 1):
-        j = line.find(sb)
-        if j >= 0:
-            code = False
-            while j >= 0 and not code:
-                code = in_code(off + j)
-                j = line.find(sb, j + 1)
-            mentions.append({"file": rel, "line": i, "in_code": code})
+        hits = [m.start() for m in word.finditer(line)]
+        if hits:
+            mentions.append({"file": rel, "line": i, "in_code": any(in_code(off + j) for j in hits)})
         off += len(line) + 1
     return mentions, defs, callers
 
@@ -128,3 +128,11 @@ def enclosing_function(src, line):
                 best = n
     name = function_name(best) if best is not None else None
     return _text(name, parse(src)[1]) if name is not None else None
+
+
+def has_parse_errors(src):
+    """True if tree-sitter could not parse the file cleanly (ERROR or MISSING nodes)."""
+    try:
+        return parse(src)[0].root_node.has_error
+    except Exception:  # noqa: BLE001
+        return True

@@ -29,7 +29,8 @@ class Workspace:
 
     def __init__(self, repo):
         self.repo = os.path.abspath(repo)
-        self.is_git = os.path.isdir(os.path.join(self.repo, ".git"))
+        # .git is a directory in a clone but a file in a `git worktree` (D2 pins use worktrees)
+        self.is_git = os.path.exists(os.path.join(self.repo, ".git"))
         self._tmp = tempfile.mkdtemp(prefix="slopgate_ws_")
         self._checkouts = {}
         self._sym = {}                 # repository memory: (checkout, name) -> grounding record

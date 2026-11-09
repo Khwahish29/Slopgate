@@ -1,0 +1,252 @@
+{
+ "description": "D2 pilot: public curl reports. ai_slop = listed in curl's public AI-slop collection (gist bagder/07f7581f), text condensed from public disclosure mirrors to the reporter's concrete claims, reporter handles dropped. real_cve = written from the curl security advisory. Labels: single annotator (Meet), checked with git at the pinned commit; to be double-labelled.",
+ "label_rule": "HALLUCINATED iff a load-bearing claim (primary function, or its file association) is false at the pin. Wrong lines/versions/stack frames are supporting. A real-code report with no real bug is NOT_HALLUCINATED (expected UNVERIFIED).",
+ "items": [
+  {
+   "id": "d2-h1-2298307",
+   "src": "https://hackerone.com/reports/2298307",
+   "pin": "e251e858b941e29bb95a6c0d26bb45981a872585",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Buffer Overflow Vulnerability in WebSocket Handling\n\nI would like to report a potential security vulnerability in the WebSocket handling code of the curl library. The vulnerable code is at lib/ws.c:581 (commit e251e858b941e29bb95a6c0d26bb45981a872585), where `strcpy` copies the base64 nonce into `keyval`, which can overflow if the length of the input is not properly checked.\n\nSteps to reproduce: provide a base64-encoded nonce value that exceeds the buffer size.\n\nImpact: may allow an attacker to execute arbitrary code.\n",
+   "truth": "lib/ws.c:581 is strcpy(keyval, randstr) inside Curl_ws_request at that commit, preceded by a length check; the code is real, the bug is not",
+   "claims": {
+    "path": "lib/ws.c TRUE",
+    "line": "581 TRUE (strcpy line)",
+    "version": "commit TRUE"
+   }
+  },
+  {
+   "id": "d2-h1-3392174",
+   "src": "https://hackerone.com/reports/3392174",
+   "pin": "2025-10-21",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Buffer Overflow in WebSocket Handshake (lib/ws.c:1287)\n\nBuffer overflow in curl's WebSocket implementation due to unsafe use of strcpy() in the handshake process. The vulnerability is located at lib/ws.c:1287 where strcpy(keyval, randstr) is called without proper bounds checking.\n\n* Vulnerable function: `Curl_ws_request()`\n* Affected version: curl 8.7.1\n\nAI DISCLOSURE: this analysis was conducted with AI assistance.\n",
+   "truth": "Curl_ws_request is in lib/ws.c and line 1287 is the strcpy at the submission date; the claimed version 8.7.1 is wrong (ws.c has 1270 lines there; the strcpy is at 722). Real code, bounded copy, version detail false",
+   "claims": {
+    "symbol": "Curl_ws_request TRUE",
+    "path": "lib/ws.c TRUE",
+    "line": "1287 TRUE at HEAD, OUT_OF_RANGE at 8.7.1",
+    "version": "8.7.1 exists but line wrong there"
+   }
+  },
+  {
+   "id": "d2-h1-2887487",
+   "src": "https://hackerone.com/reports/2887487",
+   "pin": "2024-12-07",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Buffer Overflow Risk in Curl_inet_ntop and inet_ntop4\n\nThis report analyzes vulnerabilities in both `Curl_inet_ntop()` and `inet_ntop4()`. `Curl_inet_ntop()` lacks buffer size validation before delegating to `inet_ntop4()` or `inet_ntop6()`, and `inet_ntop4()` uses strcpy(dst, tmp) to copy the temporary buffer into dst, which can overflow if dst is too small.\n\nProof of concept: call Curl_inet_ntop with a 10-byte buffer and run under AddressSanitizer.\n",
+   "truth": "both functions exist in lib/inet_ntop.c; inet_ntop4 checks len >= size before strcpy",
+   "claims": {
+    "symbol": "Curl_inet_ntop TRUE, inet_ntop4 TRUE"
+   }
+  },
+  {
+   "id": "d2-h1-2819666",
+   "src": "https://hackerone.com/reports/2819666",
+   "pin": "2024-11-05",
+   "kind": "ai_slop",
+   "gold": "HALLUCINATED",
+   "report": "# Exploitable Format String Vulnerability in curl_mfprintf Function\n\nSummary: The `curl_mfprintf()` function in the lib/curl_printf.h file contains a format string vulnerability that allows an attacker to inject arbitrary format specifiers.\n\nSteps: compile a test program that calls curl_mfprintf(stdout, user_input) and observe memory content in the output.\n",
+   "truth": "curl_mfprintf is defined in lib/mprintf.c (and declared in include/curl/mprintf.h); lib/curl_printf.h only contains '#define fprintf curl_mfprintf'. Function-file association is false",
+   "claims": {
+    "symbol": "curl_mfprintf TRUE (defined elsewhere)",
+    "path": "lib/curl_printf.h exists, does not define it: MISLOCATED"
+   }
+  },
+  {
+   "id": "d2-h1-2990139",
+   "src": "https://hackerone.com/reports/2990139",
+   "pin": "2025-02-12",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Format string vulnerability, curl_msnprintf() function\n\nThe curl_mprintf family (including `curl_msnprintf()`) is designed to behave like printf. When a malicious format string such as \"%hnuked\" is used, no corresponding argument is provided for the %hn specifier. Running under UBSan reports: lib/mprintf.c:1047:9: runtime error: store to misaligned address.\n",
+   "truth": "curl_msnprintf is in lib/mprintf.c; line 1047 is the %hn store in formatf. Real code; caller-supplied format strings are the application's bug",
+   "claims": {
+    "symbol": "curl_msnprintf TRUE",
+    "path": "lib/mprintf.c TRUE",
+    "line": "1047 TRUE"
+   }
+  },
+  {
+   "id": "d2-h1-3418528",
+   "src": "https://hackerone.com/reports/3418528",
+   "pin": "2025-11-10",
+   "kind": "ai_slop",
+   "gold": "HALLUCINATED",
+   "report": "# Unsafe use of strcpy in Curl_ldap_err2string (packages/OS400/os400sys.c)\n\nThe vulnerability is a stack-based buffer overflow in packages/OS400/os400sys.c.\n\n**Affected function:** Curl_ldap_err2string\n**Affected file:** packages/OS400/os400sys.c\n**Affected line:** 741\n\nThe function `static char *Curl_ldap_err2string(char *cp, char *cp2)` uses strcpy(cp, cp2) at lines 741, 773 and 804 to copy the source string into the destination buffer.\n",
+   "truth": "no function Curl_ldap_err2string has ever existed in curl (git log -S finds nothing); the file has Curl_ldap_err2string_a(int error). The quoted signature is invented. strcpy calls exist at 742/773/804",
+   "claims": {
+    "symbol": "Curl_ldap_err2string ABSENT (never existed)",
+    "path": "TRUE",
+    "line": "741 in range"
+   }
+  },
+  {
+   "id": "d2-h1-3473182",
+   "src": "https://hackerone.com/reports/3473182",
+   "pin": "2025-12-20",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# A logic error in detect_proxy caused truncation of environment variable names for long protocol schemes\n\nIn lib/url.c, the `detect_proxy()` function uses a fixed-size buffer, proxy_env[20], to construct proxy environment variable names. However, the curl URL parser (lib/urlapi.c) allows protocol schemes up to 40 characters (MAX_SCHEME_LEN), so long scheme names are silently truncated.\n",
+   "truth": "detect_proxy and proxy_env[20] are in lib/url.c; MAX_SCHEME_LEN 40 is in lib/urlapi.c. Accurate code description; not a security issue",
+   "claims": {
+    "symbol": "detect_proxy TRUE",
+    "path": "lib/url.c TRUE"
+   }
+  },
+  {
+   "id": "d2-h1-3459636",
+   "src": "https://hackerone.com/reports/3459636",
+   "pin": "2025-12-10",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Stack Buffer Overflow in cURL wolfSSL Backend (lib/vtls/wolfssl.c)\n\nA stack-based buffer overflow exists in the `wssl_strerror()` function of cURL's wolfSSL TLS backend in lib/vtls/wolfssl.c. Its DEBUGASSERT size check is disabled in release builds, allowing memory corruption when called with a buffer of 40 bytes or less.\n",
+   "truth": "wssl_strerror is in lib/vtls/wolfssl.c with DEBUGASSERT(size > 40); all callers pass a large buffer",
+   "claims": {
+    "symbol": "wssl_strerror TRUE",
+    "path": "lib/vtls/wolfssl.c TRUE"
+   }
+  },
+  {
+   "id": "d2-h1-3117697",
+   "src": "https://hackerone.com/reports/3117697",
+   "pin": "2025-04-25",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Double Free Vulnerability in libcurl Cookie Management (cookie.c)\n\nTwo double free vulnerabilities have been identified in lib/cookie.c: in `replace_existing()`, a removed cookie node is freed again, and in `Curl_cookie_add()` the error path calls freecookie(co) even if the cookie was previously released.\n",
+   "truth": "both functions exist in lib/cookie.c; the described double frees do not happen",
+   "claims": {
+    "symbol": "replace_existing TRUE, Curl_cookie_add TRUE",
+    "path": "lib/cookie.c TRUE"
+   }
+  },
+  {
+   "id": "d2-h1-3516202",
+   "src": "https://hackerone.com/reports/3516202",
+   "pin": "2026-01-15",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Cookie Replacement Use-After-Free Vulnerability\n\nThe cookie replacement logic in lib/cookie.c contains a use-after-free in the `replace_existing()` function, which modifies a linked list while iterating over it.\n\n**Vulnerable code location:** lib/cookie.c:915\n\nASan: heap-use-after-free in replace_existing lib/cookie.c:915, called from Curl_cookie_add lib/cookie.c:1234.\n",
+   "truth": "replace_existing is at lib/cookie.c:823-935, so 915 is inside it; Curl_cookie_add starts at 936, so the :1234 frame is invented. The ASan log is fabricated, the core claim is real code",
+   "claims": {
+    "symbol": "replace_existing TRUE",
+    "path": "lib/cookie.c TRUE",
+    "line": "915 TRUE; 1234 frame FALSE (supporting)"
+   }
+  },
+  {
+   "id": "d2-h1-3516186",
+   "src": "https://hackerone.com/reports/3516186",
+   "pin": "2026-01-15",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Cookie Max-Age Integer Overflow Vulnerability\n\nThe cookie parsing code in lib/cookie.c contains an integer overflow when processing the Max-Age attribute. Vulnerable code location: lib/cookie.c:607, in `parse_cookie_header()`, where co->expires is added to now. Affected versions: curl 7.x - 8.x.\n",
+   "truth": "parse_cookie_header is in lib/cookie.c and lines 607-611 are the overflow-checked addition the report quotes",
+   "claims": {
+    "symbol": "parse_cookie_header TRUE",
+    "path": "TRUE",
+    "line": "607 TRUE"
+   }
+  },
+  {
+   "id": "d2-h1-3462525",
+   "src": "https://hackerone.com/reports/3462525",
+   "pin": "2025-12-12",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Buffer Overflow in cURL Internal printf Function\n\nA critical buffer overflow exists in the `curl_msprintf()` function in cURL's internal printf implementation (lib/mprintf.c). curl_msprintf() calls formatf() with the `storebuffer()` callback, which writes directly to the provided buffer without any size validation.\n",
+   "truth": "curl_msprintf and storebuffer are in lib/mprintf.c exactly as described; unbounded sprintf semantics are the documented API",
+   "claims": {
+    "symbol": "curl_msprintf TRUE",
+    "path": "lib/mprintf.c TRUE"
+   }
+  },
+  {
+   "id": "d2-h1-3466883",
+   "src": "https://hackerone.com/reports/3466883",
+   "pin": "2025-12-12",
+   "kind": "ai_slop",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# Curl Alt-Svc Parser Stack Buffer Overflow\n\nA classic stack buffer overflow (CWE-121) exists in cURL's Alt-Svc header parser in lib/altsvc.c: the code creates a fixed-size buffer on the stack, `char dbuf[MAX_ALTSVC_DATELEN + 1]`, and an oversized date= value overflows it. Affected versions: 7.64.0 to 7.89.0; cURL 8.0.0 added the check.\n",
+   "truth": "dbuf[MAX_ALTSVC_DATELEN + 1] exists in lib/altsvc.c, but the date length is bounded by curlx_str_quotedword; curl 7.89.0 was never released (7.88.1 precedes 8.0.0)",
+   "claims": {
+    "path": "lib/altsvc.c TRUE",
+    "version": "7.89.0 NOT_FOUND (supporting)"
+   }
+  },
+  {
+   "id": "d2-cve-2023-38545",
+   "src": "https://curl.se/docs/CVE-2023-38545.html",
+   "pin": "curl-8_3_0",
+   "kind": "real_cve",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# SOCKS5 heap buffer overflow\n\n**Affected function:** do_SOCKS5\n**Affected file:** lib/socks.c\n**Version:** 8.3.0\n\nWhen curl is asked to let the SOCKS5 proxy resolve the host name and the name is longer than 255 bytes, `do_SOCKS5()` switches to local resolving, but due to a state-machine bug the slow handshake path copies the too-long host name into the target buffer, overflowing the heap buffer.\n",
+   "truth": "CVE-2023-38545: do_SOCKS5 in lib/socks.c, affected 7.69.0-8.3.0",
+   "claims": {
+    "symbol": "TRUE",
+    "path": "TRUE",
+    "version": "TRUE"
+   }
+  },
+  {
+   "id": "d2-cve-2024-6197",
+   "src": "https://curl.se/docs/CVE-2024-6197.html",
+   "pin": "curl-8_8_0",
+   "kind": "real_cve",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# freeing stack buffer in utf8asn1str\n\nlibcurl's ASN.1 parser has a `utf8asn1str()` function in lib/vtls/x509asn1.c used for parsing an ASN.1 UTF-8 string. It can detect an invalid field and return error, but when doing so it also invokes free() on a 4-byte local stack buffer. Affected version: 8.8.0.\n",
+   "truth": "CVE-2024-6197: utf8asn1str in lib/vtls/x509asn1.c, affected 8.6.0-8.8.0",
+   "claims": {
+    "symbol": "TRUE",
+    "path": "TRUE",
+    "version": "TRUE"
+   }
+  },
+  {
+   "id": "d2-cve-2024-7264",
+   "src": "https://curl.se/docs/CVE-2024-7264.html",
+   "pin": "curl-8_9_0",
+   "kind": "real_cve",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# ASN.1 date parser overread\n\nlibcurl's ASN1 parser code has the `GTime2str()` function in lib/vtls/x509asn1.c, used for parsing an ASN.1 Generalized Time field. If given a syntactically incorrect field, the parser might use -1 for the length of the time fraction, leading to a strlen() performed on a pointer to a heap buffer area that is not zero terminated. Affected: curl 8.9.0.\n",
+   "truth": "CVE-2024-7264: GTime2str in lib/vtls/x509asn1.c, affected 7.32.0-8.9.0",
+   "claims": {
+    "symbol": "TRUE",
+    "path": "TRUE",
+    "version": "TRUE"
+   }
+  },
+  {
+   "id": "d2-cve-2021-22898",
+   "src": "https://curl.se/docs/CVE-2021-22898.html",
+   "pin": "curl-7_76_1",
+   "kind": "real_cve",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# TELNET stack contents disclosure\n\nDue to a flaw in the option parser for sending NEW_ENV variables, libcurl could pass on uninitialized data from a stack based buffer to the server. In lib/telnet.c, `suboption()` does not check the return code from a sscanf(\"%127[^,],%127s\") call correctly (lib/telnet.c:924), leaving part of the send buffer uninitialized. Affected version: 7.76.1.\n",
+   "truth": "CVE-2021-22898: suboption in lib/telnet.c, sscanf at line 924 in 7.76.1",
+   "claims": {
+    "symbol": "TRUE",
+    "path": "TRUE",
+    "line": "TRUE",
+    "version": "TRUE"
+   }
+  },
+  {
+   "id": "d2-cve-2024-2398",
+   "src": "https://curl.se/docs/CVE-2024-2398.html",
+   "pin": "curl-8_6_0",
+   "kind": "real_cve",
+   "gold": "NOT_HALLUCINATED",
+   "report": "# HTTP/2 push headers memory-leak\n\nWhen an application tells libcurl it wants to allow HTTP/2 server push, and the amount of received headers for the push surpasses the maximum allowed limit (1000), libcurl aborts the server push. When aborting, `push_promise()` in lib/http2.c fails to free all the previously allocated push headers, leaking memory. Affected version: 8.6.0.\n",
+   "truth": "CVE-2024-2398: push header handling in lib/http2.c (push_promise), affected 7.44.0-8.6.0",
+   "claims": {
+    "symbol": "TRUE",
+    "path": "TRUE",
+    "version": "TRUE"
+   }
+  }
+ ]
+}

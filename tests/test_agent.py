@@ -347,8 +347,10 @@ class Association(unittest.TestCase):
     def test_loop_cannot_finish_before_the_pair_is_checked(self):
         r, c = run([claims_reply(LB_SYM, SUP_PATH), call("find_symbol", "C1", name="chunk_decode"),
                     call("check_path", "C2", path="lib/a.c"), STOP, verdict("UNVERIFIED", "Defined [E1].")])
-        self.assertEqual(r["stop_reason"], "llm_stop")                       # (b) did not fire
-        self.assertEqual(r["pair_states"][0]["state"], "open")
+        # The model's stop is refused while the pair is open; the guard runs symbol_in_file itself.
+        self.assertEqual(r["stop_reason"], "all_claims_resolved")
+        self.assertNotEqual(r["pair_states"][0]["state"], "open")
+        self.assertIn("agent-guard", [row["by"] for row in r["ledger"]])
         self.assertIn("Association checks", c.seen[3][1]["content"])
         self.assertIn("symbol_in_file", c.seen[3][0]["content"])
 
@@ -430,7 +432,7 @@ class Ablations(unittest.TestCase):
     def test_skeptic_can_only_downgrade(self):
         seen = []
         self._module("skeptic", lambda rt, L, cl, ws, ref: seen.append("called") or "UNVERIFIED")
-        self.assertEqual(self._hall()["verdict"], "HALLUCINATED")           # off by default
+        self.assertEqual(self._hall(use_skeptic=False)["verdict"], "HALLUCINATED")   # switch off: not called
         self.assertEqual(seen, [])
         self.assertEqual(self._hall(use_skeptic=True)["verdict"], "UNVERIFIED")
         self.assertEqual(seen, ["called"])
@@ -577,3 +579,17 @@ class RateLimits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StopGuard(unittest.TestCase):
+    def test_forged_file_is_caught_even_if_the_model_stops_early(self):
+        text = "# Overflow\n\nThe function `chunk_decode()` in lib/b.c overflows near line 1.\n"
+        span = "The function `chunk_decode()` in lib/b.c overflows near line 1."
+        sym = claim("symbol", "chunk_decode", "load-bearing", span)
+        path = claim("path", "lib/b.c", "load-bearing", span)
+        r, _ = run([claims_reply(sym, path), call("find_symbol", "C1", name="chunk_decode"), STOP,
+                    verdict("HALLUCINATED", "chunk_decode is not in lib/b.c [E2].")],
+                   text=text, repo=repo_with(extra=["b.c"]), use_skeptic=False)
+        self.assertEqual(r["ledger"][1]["by"], "agent-guard")
+        self.assertEqual(r["ledger"][1]["status"], "MISLOCATED")
+        self.assertEqual(r["verdict"], "HALLUCINATED")

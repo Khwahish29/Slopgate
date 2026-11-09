@@ -127,13 +127,35 @@ class TreeSitter(unittest.TestCase):
         self.assertGreater(regex_wrong, 0)                         # the curl-style fixture exposes the regex scan
 
 
+class ParseErrorFallback(unittest.TestCase):
+    @unittest.skipUnless(ts_ground.available(), "tree-sitter not installed")
+    def test_ifdef_in_parameter_list_does_not_hide_later_definitions(self):
+        # curl lib/socks.c (8.3.0): an #ifdef inside socksstate()'s parameter list breaks the parse,
+        # and do_SOCKS5 further down was reported MENTIONED. A real CVE function auto-dismissed.
+        src = ("static void socksstate(int a\n#ifdef DEBUG\n, int lineno\n#endif\n)\n{\n  (void)a;\n}\n\n"
+               "static int do_SOCKS5(int x,\n                     int y)\n{\n  return x + y;\n}\n"
+               "int main(void) { return do_SOCKS5(1, 2); }\n")
+        r = find(tree({"socks.c": src}), "do_SOCKS5", "treesitter")
+        self.assertEqual(r["status"], "DEFINED")
+
+
+class WholeIdentifier(unittest.TestCase):
+    def test_prefix_of_a_real_name_is_absent_not_mentioned(self):
+        # D2 (HackerOne 3418528): the invented Curl_ldap_err2string vs the real Curl_ldap_err2string_a
+        src = "const char *Curl_ldap_err2string_a(int e)\n{\n  return 0;\n}\n"
+        for mode in ("regex", "treesitter"):
+            if mode == "treesitter" and not ts_ground.available():
+                continue
+            self.assertEqual(find(tree({"os400sys.c": src}), "Curl_ldap_err2string", mode)["status"], "ABSENT")
+
+
 class Switch(unittest.TestCase):
     def test_modes(self):
         for m in ("regex", "", "nonsense"):
             with mock.patch.dict(os.environ, {"SLOPGATE_PARSER": m}):
                 self.assertEqual(ground.parser_mode(), "regex")
         with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != "SLOPGATE_PARSER"}, clear=True):
-            self.assertEqual(ground.parser_mode(), "regex")                 # opt-in: default is unchanged
+            self.assertEqual(ground.parser_mode(), "treesitter" if ts_ground.available() else "regex")   # default: auto
         for m in ("auto", "treesitter"):
             with mock.patch.dict(os.environ, {"SLOPGATE_PARSER": m}):
                 self.assertEqual(ground.parser_mode(), "treesitter" if ts_ground.available() else "regex")

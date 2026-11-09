@@ -60,10 +60,10 @@ REGEX_CHECKED_BY = "regex definition scan with comment/string stripping"
 
 
 def parser_mode():
-    """'treesitter' or 'regex', from SLOPGATE_PARSER = regex (default) | treesitter | auto.
+    """'treesitter' or 'regex', from SLOPGATE_PARSER = auto (default) | treesitter | regex.
     Opt-in until the team switches the default at integration; treesitter and auto both fall
     back to regex when tree-sitter is not installed."""
-    want = os.environ.get("SLOPGATE_PARSER", "regex").strip().lower()
+    want = os.environ.get("SLOPGATE_PARSER", "auto").strip().lower()
     if want not in ("treesitter", "auto"):
         return "regex"
     return "treesitter" if ts_ground.available() else "regex"
@@ -74,9 +74,10 @@ def _scan_regex(src, rel, sym):
     mentions, defs, callers = [], [], []
     code = strip_comments(src)
     code_lines = code.splitlines()
+    word = re.compile(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(sym))
     for i, line in enumerate(src.splitlines(), 1):
-        if sym in line:
-            in_code = i <= len(code_lines) and sym in code_lines[i - 1]
+        if word.search(line):
+            in_code = i <= len(code_lines) and bool(word.search(code_lines[i - 1]))
             mentions.append({"file": rel, "line": i, "in_code": in_code})
     for pat in DEF_PATTERNS:
         for m in re.finditer(pat.format(sym=re.escape(sym)), code, re.M):
@@ -93,7 +94,7 @@ def find_symbol(repo, sym):
     """Return a grounding record for one symbol."""
     mentions, defs, callers = [], [], []
     files = list(walk_sources(repo))
-    mode, n_regex = parser_mode(), 0
+    mode, n_regex, n_fallback = parser_mode(), 0, 0
     for path in files:
         try:
             src = open(path, encoding="utf-8", errors="replace").read()
@@ -104,6 +105,15 @@ def find_symbol(repo, sym):
         rel = os.path.relpath(path, repo)
         if mode == "treesitter" and path.endswith(ts_ground.TS_EXT):
             m, d, c = ts_ground.scan(src, rel, sym)
+            if not d and ts_ground.has_parse_errors(src):
+                # Preprocessor conditionals inside declarations (curl's socks.c: an #ifdef inside a
+                # parameter list) break the parse and hide later definitions. Never let a broken
+                # parse turn a real definition into MENTIONED: fall back to the regex definition scan
+                # for this file. This can only add definitions, never remove one.
+                _, rd, _ = _scan_regex(src, rel, sym)
+                if rd:
+                    d = [dict(x, kind="function", via="regex-fallback") for x in rd]
+                    n_fallback += 1
         else:
             m, d, c = _scan_regex(src, rel, sym)
             n_regex += 1
@@ -114,7 +124,8 @@ def find_symbol(repo, sym):
     if mode == "regex":
         checked_by = REGEX_CHECKED_BY
     else:
-        checked_by = ts_ground.CHECKED_BY + ("; regex scan for %d non-C file(s)" % n_regex if n_regex else "")
+        checked_by = ts_ground.CHECKED_BY + ("; regex scan for %d non-C file(s)" % n_regex if n_regex else "") \
+            + ("; regex fallback in %d file(s) with parse errors" % n_fallback if n_fallback else "")
     return {
         "symbol": sym,
         "status": status,

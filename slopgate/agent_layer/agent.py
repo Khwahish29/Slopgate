@@ -11,6 +11,7 @@ Hard rules, enforced here and not left to the model:
     message. The verdict stage never sees it.
   * Nothing is remembered between reports. Temperature 0 comes from the client.
 """
+import copy
 import importlib
 import inspect
 import json
@@ -150,7 +151,7 @@ class ThrottledClient:
 
 @dataclass
 class AgentConfig:
-    use_skeptic: bool = False
+    use_skeptic: bool = True
     skeptic_same_model: bool = False
     use_citation_check: bool = True
     use_git_history: bool = True
@@ -526,6 +527,7 @@ def finalize(proposed, rationale, ledger, claims, meta, injection, config, repor
 
     verdict, text = None, rationale
     hook = None
+    skeptic_rows = []
     if proposed is not None and config.use_citation_check:
         hook, found = _call_hook("citation_verifier", "verify_and_adjudicate")
         if not found:
@@ -583,7 +585,14 @@ def finalize(proposed, rationale, ledger, claims, meta, injection, config, repor
             except (TypeError, ValueError):
                 pass
             try:
-                res = fn(report_text, ledger, claims, ws, ref, **kw)
+                # The skeptic works on a copy: its rows go to the trace, not into the planner's ledger,
+                # so they can never become citable evidence for the rationale.
+                sl = copy.deepcopy(ledger)
+                n0 = len(sl.rows)
+                res = fn(report_text, sl, claims, ws, ref, **kw)
+                skeptic_rows = sl.rows[n0:]
+                if isinstance(res, dict) and res.get("objections"):
+                    events.append("skeptic objections: " + "; ".join(o.get("rule", "?") for o in res["objections"]))
                 v = res[0] if isinstance(res, (tuple, list)) and res else (res.get("verdict") if isinstance(res, dict) else res)
                 if isinstance(v, str) and v.upper() != "HALLUCINATED":
                     events.append("skeptic downgraded HALLUCINATED to UNVERIFIED")
@@ -594,7 +603,8 @@ def finalize(proposed, rationale, ledger, claims, meta, injection, config, repor
                 events.append("skeptic failed (%s): UNVERIFIED" % type(e).__name__)
                 verdict = "UNVERIFIED"
     conf = det["confidence"] if verdict == det_v else 0.5
-    return {"verdict": verdict, "rationale": text, "events": events, "confidence": conf}
+    return {"verdict": verdict, "rationale": text, "events": events, "confidence": conf,
+            "skeptic_rows": skeptic_rows}
 
 
 # --------------------------------------------------------------------------- the system
@@ -692,7 +702,7 @@ class Agent(System):
         L, meta, seen, ref = Ledger(), {}, set(), None
         pairs = {(sc["value"], pc["value"]) for sc, pc in assoc_pairs(claims, na)}
 
-        stop, skip_proposal = None, False
+        stop, skip_proposal, forced_pairs = None, False, False
         if not any(c["role"] == "load-bearing" and c["id"] not in na for c in claims):
             stop = "no_load_bearing_claim"
         while stop is None:
@@ -710,6 +720,38 @@ class Agent(System):
                 break
             step.update(decision=dec["action"], thought=dec["thought"])
             if dec["action"] == "stop":
+                open_pairs = [p for p in pair_states(claims, L, meta, na, ref) if p["state"] == "open"]
+                if open_pairs and not forced_pairs:
+                    # The prompt says the run cannot finish with an association pair open; enforce it in
+                    # code. Run the open symbol_in_file checks deterministically, then let should_stop
+                    # (or the planner) decide. A model "stop" can skip work, never a forged-file check.
+                    forced_pairs = True
+                    step.update(events=events + [{"event": "stop_refused_open_pairs",
+                                                  "pairs": [(p["symbol"], p["path"]) for p in open_pairs]}])
+                    trace.append(step)
+                    for p in open_pairs:
+                        if budget.tool_calls >= MAX_TOOL_CALLS:
+                            break
+                        args = {"name": p["symbol"], "path": p["path"]}
+                        if ref:
+                            args["ref"] = ref
+                        ctx = ref_ctx(claims, L, na, ref)
+                        result = run_tool(ws, "symbol_in_file", args)
+                        row = L.add("symbol_in_file", args, result, by="agent-guard")
+                        auth = ctx in AUTHORITATIVE_CTX
+                        cls = classify("symbol_in_file", result, args, pairs, auth)
+                        meta[row["id"]] = {"claims": [p["symbol_claim"]], "cls": cls,
+                                           "tool": "symbol_in_file", "auth": auth}
+                        budget.tool_calls += 1
+                        seen.add(json.dumps(["symbol_in_file", {k: v for k, v in args.items() if k != "ref"},
+                                             "%s|%s" % (ctx, ref)], sort_keys=True))
+                        trace.append({"step": "plan", "n": len(L.rows), "decision": "guard",
+                                      "tool": "symbol_in_file", "args": args, "claim_id": p["symbol_claim"],
+                                      "claims": [p["symbol_claim"]], "ledger_id": row["id"],
+                                      "observation": {"status": row["status"], "evidence": cls,
+                                                      "detail": _brief(result)},
+                                      "budget": budget.snapshot(), "events": []})
+                    continue
                 stop = "llm_stop"
                 step["budget"] = budget.snapshot()
                 trace.append(step)
@@ -742,6 +784,7 @@ class Agent(System):
         summary = {"step": "final", "stop_reason": stop, "claim_states": states,
                    "proposed_verdict": proposed, "final_verdict": fin["verdict"],
                    "verdict_events": verdict_events, "finalize_events": fin["events"],
+                   "skeptic_rows": fin.get("skeptic_rows", []),
                    "proposed_rationale": rationale, "verdict_raw_replies": verdict_raw,
                    "pair_states": pair_states(claims, L, meta, na, ref),
                    "budget": budget.snapshot(),
@@ -760,6 +803,7 @@ class Agent(System):
                 "rationale": [{"text": s, "cites": cited_ids(s)} for s in sentences],
                 "ledger": L.dump(), "trace": trace,
                 "stop_reason": stop, "proposed_verdict": proposed, "claim_states": states,
+                "skeptic_tool_calls": len(fin.get("skeptic_rows", [])),
                 "pair_states": pair_states(claims, L, meta, na, ref),
                 "cost_usd": round(budget.cost_usd, 6), "trace_file": trace_file,
                 "throttled_calls": tc.throttled_calls, "throttle_wait_s": round(tc.throttle_wait_s, 3),
@@ -778,3 +822,6 @@ class Agent(System):
             return path
         except OSError:
             return None
+
+
+from . import agent_ablations  # noqa: E402,F401  (registers the ablation variants; must follow Agent)
