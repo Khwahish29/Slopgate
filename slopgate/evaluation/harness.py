@@ -10,7 +10,6 @@ Usage:
 
 import argparse
 import json
-import os
 import time
 from pathlib import Path
 
@@ -21,10 +20,43 @@ from ..datasets.d1 import load
 from .scoring import expected_label, score_predictions
 
 
+VALID_VERDICTS = (
+    "HALLUCINATED",
+    "UNVERIFIED",
+    "REPRODUCIBLE",
+)
+
+
+def make_result_row(item, system_name):
+    """Create a consistent result record for each report."""
+    return {
+        "id": item["id"],
+        "system": system_name,
+        "tier": item.get("tier"),
+        "repo": item["repo"],
+        "gold": item["gold"],
+        "expected_verdict": expected_label(item),
+        "verdict": None,
+        "status": "error",
+        "confidence": None,
+        "tool_calls": None,
+        "tokens": None,
+        "model_calls": None,
+        "latency_s": None,
+        "ledger": None,
+        "trace": None,
+        "rationale": None,
+        "error": None,
+    }
+
+
 def evaluate(items, system_name, limit=None):
-    """Evaluate one registered system on dataset records."""
+    """Evaluate a system while reusing and cleaning workspaces."""
     items = list(items)
+
     if limit is not None:
+        if limit < 0:
+            raise ValueError("limit must be non-negative")
         items = items[:limit]
 
     rows = []
@@ -33,32 +65,16 @@ def evaluate(items, system_name, limit=None):
     try:
         system = build(system_name)
     except Skipped as exc:
-        return [
-            {
-                "id": item["id"],
-                "system": system_name,
-                "gold": item["gold"],
-                "expected_verdict": expected_label(item),
-                "verdict": None,
-                "status": "skipped",
-                "error": str(exc),
-            }
-            for item in items
-        ]
+        for item in items:
+            row = make_result_row(item, system_name)
+            row["status"] = "skipped"
+            row["error"] = str(exc)
+            rows.append(row)
+        return rows
 
     try:
         for item in items:
-            row = {
-                "id": item["id"],
-                "system": system_name,
-                "tier": item.get("tier"),
-                "repo": item["repo"],
-                "gold": item["gold"],
-                "expected_verdict": expected_label(item),
-                "verdict": None,
-                "status": "error",
-            }
-
+            row = make_result_row(item, system_name)
             started = time.perf_counter()
 
             try:
@@ -67,7 +83,7 @@ def evaluate(items, system_name, limit=None):
 
                 if not report_path:
                     raise ValueError(
-                        "Missing report_path for " + item["id"]
+                        f"Missing report_path for {item['id']}"
                     )
 
                 if not Path(report_path).is_file():
@@ -91,11 +107,7 @@ def evaluate(items, system_name, limit=None):
                     )
 
                 verdict = result.get("verdict")
-                if verdict not in (
-                    "HALLUCINATED",
-                    "UNVERIFIED",
-                    "REPRODUCIBLE",
-                ):
+                if verdict not in VALID_VERDICTS:
                     raise ValueError(
                         f"Invalid verdict: {verdict!r}"
                     )
@@ -120,14 +132,13 @@ def evaluate(items, system_name, limit=None):
                 row.update({
                     "status": "skipped",
                     "error": str(exc),
+                    "latency_s": time.perf_counter() - started,
                 })
 
             except Exception as exc:
                 row.update({
                     "status": "error",
-                    "error": (
-                        f"{type(exc).__name__}: {exc}"
-                    ),
+                    "error": f"{type(exc).__name__}: {exc}",
                     "latency_s": time.perf_counter() - started,
                 })
 
@@ -141,7 +152,7 @@ def evaluate(items, system_name, limit=None):
 
 
 def save_results(rows, output_dir, system_name):
-    """Write per-report results and aggregate metrics."""
+    """Write predictions and aggregate metrics."""
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -170,18 +181,15 @@ def main(argv=None):
         "--data",
         default="corpus/d1/d1.jsonl",
     )
-
     parser.add_argument(
         "--systems",
         nargs="+",
         default=["b1", "b3_rules"],
     )
-
     parser.add_argument(
         "--out",
         default="results/d1",
     )
-
     parser.add_argument(
         "--limit",
         type=int,
@@ -216,21 +224,26 @@ def main(argv=None):
             f"Completed: {metrics['completed']}"
             f"/{metrics['total']}"
         )
+        print(f"Accuracy: {metrics['accuracy']}")
+        print(f"Coverage: {metrics['coverage']}")
+        print(f"Errors: {metrics['errors']}")
+        print(f"Skipped: {metrics['skipped']}")
+
+        if metrics["false_hallucination_rate"] is not None:
+            print(
+                "False-hallucination rate: "
+                f"{metrics['false_hallucination_rate']:.2%}"
+            )
+
+        if metrics["hallucination_recall"] is not None:
+            print(
+                "Hallucination recall: "
+                f"{metrics['hallucination_recall']:.2%}"
+            )
 
         print(
-            f"Accuracy: {metrics['accuracy']}"
-        )
-
-        print(
-            f"Coverage: {metrics['coverage']}"
-        )
-
-        print(
-            f"Errors: {metrics['errors']}"
-        )
-
-        print(
-            f"Skipped: {metrics['skipped']}"
+            "Mean classification cost: "
+            f"{metrics['mean_classification_cost']}"
         )
 
     return 0
