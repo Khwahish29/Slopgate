@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -140,6 +141,31 @@ class Skeptic(unittest.TestCase):
         for o in out["objections"]:
             self.assertTrue(o["cites"] and all(L.get(i) for i in o["cites"]))
 
+    def test_comment_only_name_in_history_is_not_a_rescue(self):
+        # T2 shape: the name was only ever written in a comment. git log -S finds that commit,
+        # but the name was never DEFINED there, so the history rule must not fire.
+        noted = {"lib/a.c": "/* TODO: ghost_parse() for bignums */\n" + CODE}
+        d = repo(noted, history=[{"lib/a.c": CODE}])
+        ws, c = Workspace(d), claims_for("ghost_parse")
+        L, det = ground(ws, c)
+        self.assertEqual(det["verdict"], "HALLUCINATED")
+        out = skeptic_pass(ws, L, c, det)
+        self.assertNotIn("history", [o["rule"] for o in out["objections"]])
+        self.assertEqual(out["verdict"], "HALLUCINATED")
+
+    def test_real_function_with_invented_path_is_not_closed(self):
+        d = repo({"lib/a.c": CODE, "src/main.c": MAIN}, history=[])
+        ws = Workspace(d)
+        c = [dict(x, id="C%d" % i) for i, x in enumerate([
+            {"type": "symbol", "value": "chunk_decode", "span": "chunk_decode", "role": "load-bearing"},
+            {"type": "path", "value": "tests/fuzz/fuzz_chunk.c", "span": "tests/fuzz/fuzz_chunk.c", "role": "load-bearing"}], 1)]
+        L = Ledger()
+        L.add("find_symbol", {"name": "chunk_decode"}, run_tool(ws, "find_symbol", {"name": "chunk_decode"}))
+        L.add("check_path", {"path": "tests/fuzz/fuzz_chunk.c"}, run_tool(ws, "check_path", {"path": "tests/fuzz/fuzz_chunk.c"}))
+        out = skeptic_pass(ws, L, c, {"verdict": "HALLUCINATED", "confidence": 0.9, "reasons": []})
+        self.assertEqual(out["verdict"], "UNVERIFIED")
+        self.assertIn("defined_elsewhere", [o["rule"] for o in out["objections"]])
+
     def test_ref_drift(self):
         # tagged release lacks the function; it was added after the tag
         d = repo({"lib/a.c": "int new_parse(char *p) {\n  return *p;\n}\n"},
@@ -152,6 +178,7 @@ class Skeptic(unittest.TestCase):
         self.assertEqual(out["verdict"], "UNVERIFIED")
         self.assertIn("ref_drift", [o["rule"] for o in out["objections"]])
 
+    @mock.patch.dict(os.environ, {"SLOPGATE_PARSER": "regex"})   # the regex scan misses macros; tree-sitter does not
     def test_code_use_of_macro(self):
         src = "#define ghost_parse(p) (*(p))\nint f(char *p) {\n  return ghost_parse(p);\n}\n"
         d = repo({"lib/a.c": src})

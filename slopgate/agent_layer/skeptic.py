@@ -33,6 +33,7 @@ from . import verifier
 from .tools import TOOLS, run_tool
 
 MAX_MODEL_CHECKS = 3
+MAX_HISTORY_COMMITS = 3
 
 
 def _primary(claims, t):
@@ -68,7 +69,8 @@ def _rule_checks(ws, L, claims):
     prow = path_rows[0] if path_rows else None
 
     # completed: the primary claims were actually checked
-    if sym and not srow and not prow:
+    sif_done = _done(L.find("symbol_in_file", name=sym)) if sym else []
+    if sym and not srow and not prow and not sif_done:
         all_rows = L.find("find_symbol", name=sym)
         objections.append({"rule": "completed", "cites": [r["id"] for r in all_rows],
                            "text": "no completed check of the primary symbol '%s'; a failed "
@@ -77,16 +79,33 @@ def _rule_checks(ws, L, claims):
 
     sstatus = srow["status"] if srow else None
 
-    # history: absent or mention-only now, but present in some commit
+    # history: absent or mention-only now, but DEFINED at some earlier commit. A bare `git log -S`
+    # hit is not enough: it also matches a name that was only ever written in a comment, string
+    # or doc (a T2 fabrication). So each candidate commit is re-checked with find_symbol, at the
+    # commit for "added"/"changed" and at its parent for "removed".
     if sym and sstatus in ("ABSENT", "MENTIONED"):
         h = _done(L.find("git_history", name=sym))
         h = h[0] if h else _run(ws, L, "git_history", {"name": sym})
         if h["status"] in ("REMOVED", "PRESENT_IN_HISTORY"):
-            c = (h["result"].get("commits") or [{}])[0]
-            objections.append({"rule": "history", "cites": [srow["id"], h["id"]],
-                               "text": "'%s' is %s at this ref but appears in git history (%s %s): "
-                                       "a real, since-changed name, not an invented one"
-                                       % (sym, sstatus, c.get("commit", "?"), c.get("kind", ""))})
+            for c in (h["result"].get("commits") or [])[:MAX_HISTORY_COMMITS]:
+                at = c.get("commit", "")
+                if not at:
+                    continue
+                if c.get("kind") == "removed":
+                    r = ws.git("rev-parse", "--verify", "--quiet", at + "~1")
+                    if r.returncode != 0:
+                        continue
+                    at = r.stdout.strip()[:12]
+                try:
+                    past = _run(ws, L, "find_symbol", {"name": sym, "ref": at})
+                except Exception:  # noqa: BLE001  (a failed check is not support)
+                    continue
+                if past["status"] == "DEFINED":
+                    objections.append({"rule": "history", "cites": [srow["id"], h["id"], past["id"]],
+                                       "text": "'%s' is %s at this ref but was defined at %s (%s): "
+                                               "a real, since-changed name, not an invented one"
+                                               % (sym, sstatus, at, past["result"].get("location", "")) })
+                    break
 
     # ref_drift: absent at the resolved ref, present in the working tree
     if ref:
@@ -102,6 +121,15 @@ def _rule_checks(ws, L, claims):
                 objections.append({"rule": "ref_drift", "cites": [prow["id"], w["id"]],
                                    "text": "'%s' is absent at %s but exists in the working tree"
                                            % (path, ref)})
+
+    # defined_elsewhere: the function is real at this ref but the claimed file does not exist. A real
+    # report with a wrong or invented supporting path (D3 suppression) must not be closed on the path
+    # alone. Invented functions (ABSENT/MENTIONED) are unaffected.
+    if srow and sstatus == "DEFINED" and prow and prow["status"] == "ABSENT":
+        objections.append({"rule": "defined_elsewhere", "cites": [srow["id"], prow["id"]],
+                           "text": "'%s' is defined (%s) even though the claimed file '%s' does not exist; "
+                                   "a wrong path does not make the function invented"
+                                   % (sym, srow["result"].get("location", ""), path)})
 
     # code_use: MENTIONED but used as code, so the definition scan may simply have missed it
     if srow and sstatus == "MENTIONED":
@@ -183,3 +211,39 @@ def skeptic_pass(ws, L, claims, proposed, injection=(), backend=None,
     else:
         out.update(confidence=det["confidence"], reasons=det["reasons"])
     return out
+
+
+def skeptic(report_text, ledger, claims, ws, ref, same_model=False, backend=None):
+    """Hook called by agent.finalize() for a HALLUCINATED verdict. -> dict with "verdict".
+
+    The skeptic model is chosen from the environment: SKEPTIC_API_KEY / SKEPTIC_BASE_URL /
+    SKEPTIC_MODEL for the cross-model skeptic (Milestone 1: a different family from the planner),
+    or the planner's XAI_* endpoint when same_model=True (the ablation). With no key the skeptic
+    runs its deterministic rule checks only. report_text is not shown to the model."""
+    if backend is None:
+        backend = _env_backend("XAI" if same_model else "SKEPTIC")
+    n0 = len(ledger.rows)
+    objections = _rule_checks(ws, ledger, claims)
+    if backend is not None:
+        proposed = {"verdict": "HALLUCINATED", "reasons": []}
+        objections += _model_checks(ws, ledger, claims, proposed, backend, MAX_MODEL_CHECKS)[0]
+        sym = _primary(claims, "symbol")
+        for r in ledger.rows[n0:]:            # a model-proposed check that GROUNDS the load-bearing symbol
+            if r["tool"] == "find_symbol" and r["args"].get("name") == sym and r["status"] == "DEFINED":
+                objections.append({"rule": "model_check", "cites": [r["id"]],
+                                   "text": "skeptic check found '%s' DEFINED" % sym})
+    binding = [o for o in objections if not o.get("advisory")]
+    return {"verdict": "UNVERIFIED" if binding else "HALLUCINATED", "objections": objections,
+            "rows": [r["id"] for r in ledger.rows[n0:]]}
+
+
+def _env_backend(prefix):
+    import os
+    if not os.environ.get(prefix + "_API_KEY"):
+        return None
+    try:
+        from .llm import LLMBackend, OpenAICompatClient
+        client = OpenAICompatClient.from_env(prefix)
+        return LLMBackend(client, prefix.lower()) if client else None
+    except Exception:  # noqa: BLE001
+        return None

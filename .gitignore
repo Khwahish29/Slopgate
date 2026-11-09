@@ -6,3 +6,8 @@ corpus/d4/
 eval/results/*.json
 .venv/
 .slopgate_cache/
+corpus/d2/curl
+corpus/d2/worktrees/
+corpus/d2/reports/
+corpus/d2/d2.jsonl
+results/
