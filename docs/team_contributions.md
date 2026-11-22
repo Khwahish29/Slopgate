@@ -15,6 +15,18 @@ This repository is intentionally scoped to the claim extraction and evidence rep
 - Skeptic pass: `slopgate/agent_layer/skeptic.py`
 - Tests: `tests/test_prose_extract.py`, `tests/test_b1_skeptic.py`
 - Report: Section 1 (`docs/section1_introduction.md`)
+- Robustness evaluation (D3 suppression, D4 injection, sanitizer): `slopgate/evaluation/robustness.py`
+- Skeptic wiring: rule checks at the agent's ref, re-adjudication, cached and capped skeptic model,
+  objections and skeptic model cost in the agent trace (`skeptic.py`, skeptic call site in `agent.py`)
+- Extractor fixes (`prose_extract.py`): generic bullet fields, docs paths, whole-word symbol/path
+  association, test/fuzz paths lose ties
+- Sanitizer improvements for injection and suppression (`extract.sanitize`): Unicode normalisation,
+  hidden characters, pattern families, signal `kind`
+- Repro-claim extractor for the sandbox: `slopgate/agent_layer/repro_extract.py`
+- Calibration and HALLUCINATED threshold: `slopgate/evaluation/calibrate.py`
+- Demo driver: `slopgate/demo.py`
+- Tests: `tests/test_sanitize.py`, `tests/test_repro_extract.py`, `tests/test_skeptic_wiring.py`,
+  `tests/test_robustness_calibrate_demo.py`, additions to `tests/test_prose_extract.py`
 - Commits / PRs: _fill in after merge_
 
 ## Meet Patel: final milestone (Section 7)

@@ -48,7 +48,8 @@ DEFECT_WORDS = re.compile(
     r"write[s]? past|read[s]? past|beyond the|injection|vulnerab|crash|corrupt|"
     r"trusts? a length|unchecked|without (?:bounds )?check")
 
-CODE_EXT = r"(?:c|h|cc|cpp|cxx|hpp|py|go|js|ts|rs|java|rb|php)"
+# Source files plus the docs/build files a report may legitimately name ("docs/README.md").
+CODE_EXT = r"(?:c|h|cc|cpp|cxx|hpp|inc|py|go|js|ts|rs|java|rb|php|sh|cmake|am|in|md|txt|rst)"
 PATH_RE = re.compile(r"(?<![\w/.:-])((?:[\w.-]+/)+[\w.-]+\.%s)(?::(\d+))?(?![\w/])" % CODE_EXT)
 
 # foo() / foo(...) ; backticked or bare
@@ -72,6 +73,26 @@ TAG_RES = [
     re.compile(r"(?i)\b[a-z][\w-]*\s+(v?\d+\.\d+(?:\.\d+)?)\b"),         # "curl 8.4.0"
 ]
 CWE_RE = re.compile(r"\bCWE-\d{1,5}\b")
+
+# Generic "Label: value" fields, in any of the bullet / bold / blockquote shapes model-written
+# reports use ("- **Line:** 28", "> Component: `lib/hdr.c`", "Affected versions: 1.2").
+# ex.FIELD_RE only knows the exact "**Affected file:**" spelling.
+_LEAD = r"(?im)^[ \t>*_-]*(?:affected\s+|vulnerable\s+)?"
+_SEP = r"[ \t*_]{0,4}[:=][ \t*_]*`?"
+GENERIC_FIELD_RE = {
+    "function": re.compile(_LEAD + r"(?:function|symbol|routine|method)" + _SEP + r"([A-Za-z_]\w{2,80})(?:\(\))?`?"),
+    "file": re.compile(_LEAD + r"(?:file|component|source(?:[ \t]+file)?|path|location)" + _SEP +
+                       r"((?:[\w.-]+/)+[\w.-]+\.\w{1,5})(?::(\d+))?`?"),
+    "line": re.compile(_LEAD + r"line(?:[ \t]+number)?" + _SEP + r"(\d{1,6})\b"),
+    "version": re.compile(_LEAD + r"(?:versions?|release)" + _SEP + r"(v?[A-Za-z0-9][\w.\-]*\d[\w.\-]*)"),
+}
+# A vulnerability in a test harness or fuzzer is not a claim about the product code.
+TEST_DIR_RE = re.compile(r"(?:^|/)(?:tests?|fuzz(?:ers?|ing)?|examples?|testdata)/")
+
+
+def _word_in(name, text):
+    """`name` as a whole identifier, so buf_append does not match buf_append_secure_wrapper."""
+    return bool(name) and re.search(r"(?<!\w)%s(?!\w)" % re.escape(str(name)), text) is not None
 
 NOT_SYMBOLS = {
     "if", "for", "while", "switch", "return", "sizeof", "else", "case", "void", "char",
@@ -98,12 +119,22 @@ def _is_identifier_like(name, backticked):
 # ---- extraction ------------------------------------------------------------
 
 def _header_fields(text):
-    out = {}
+    """Field values and the matched field text (its span). The exact ex.FIELD_RE spelling wins;
+    generic "Label: value" fields fill whatever it did not find."""
+    out, spans = {}, {}
     for key, pat in ex.FIELD_RE.items():
         m = re.search(pat, text)
         if m:
-            out[key] = m.group(1)
-    return out
+            out[key], spans[key] = m.group(1), m.group(0)
+    for key, rx in GENERIC_FIELD_RE.items():
+        if key in out:
+            continue
+        m = rx.search(text)
+        if m:
+            out[key], spans[key] = m.group(1), m.group(0).strip()
+            if key == "file" and m.group(2) and "line" not in out:      # "File: lib/x.c:12"
+                out["line"], spans["line"] = m.group(2), m.group(0).strip()
+    return out, spans
 
 
 def _symbols(segs):
@@ -145,8 +176,9 @@ def _paths(segs):
             p = m.group(1)
             if "://" in seg[max(0, m.start() - 8):m.start() + 3]:
                 continue
-            rec = found.setdefault(p, {"span": seg, "first": i, "count": 0, "lines": []})
+            rec = found.setdefault(p, {"span": seg, "first": i, "count": 0, "lines": [], "spans": []})
             rec["count"] += 1
+            rec["spans"].append(seg)
             if m.group(2):
                 rec["lines"].append((int(m.group(2)), seg))
     return found
@@ -185,7 +217,7 @@ def _span_for(segs, value):
 def extract_prose(text):
     """Claims from free text, in the validate_claims schema."""
     segs = segments(text)
-    header = _header_fields(text)
+    header, hspans = _header_fields(text)
     claims = []
 
     # symbols
@@ -200,14 +232,19 @@ def extract_prose(text):
     paths = _paths(segs)
     primary_path = header.get("file")
     if primary_path and primary_path not in paths:
-        paths[primary_path] = {"span": _span_for(segs, primary_path), "first": -1, "count": 1, "lines": []}
+        paths[primary_path] = {"span": _span_for(segs, primary_path), "first": -1, "count": 1,
+                               "lines": [], "spans": []}
     if not primary_path and paths:
-        near = [p for p in paths if primary_sym and primary_sym in paths[p]["span"]]
-        if not near and primary_sym:
-            ps = syms[primary_sym]["span"]
-            near = [p for p in paths if p in ps]
-        pool = near or list(paths)
-        primary_path = max(pool, key=lambda p: (paths[p]["count"], -paths[p]["first"]))
+        # The defect's file is the one written next to the primary function (as a whole word: an
+        # invented `foo_wrapper()` beside a fake path must not borrow foo's weight), then one given
+        # with a line number, then one outside test/fuzz directories, then the most repeated.
+        ps = syms[primary_sym]["span"] if primary_sym in syms else ""
+
+        def rank(p):
+            r = paths[p]
+            near = any(_word_in(primary_sym, sp) for sp in r["spans"]) or p in ps
+            return (near, bool(r["lines"]), not TEST_DIR_RE.search(p), r["count"], -r["first"])
+        primary_path = max(paths, key=rank)
 
     for name in sorted(syms, key=lambda n: syms[n]["first"]):
         claims.append({"type": "symbol", "value": name, "span": syms[name]["span"],
@@ -219,15 +256,14 @@ def extract_prose(text):
     # line: header field, then "primary_path:N", then "line N" near a path or the primary symbol
     line = None
     if "line" in header:
-        field = re.search(ex.FIELD_RE["line"], text).group(0)
-        line = (int(header["line"]), _span_for(segs, field), True)
+        line = (int(header["line"]), _span_for(segs, hspans["line"]), True)
     elif primary_path and paths.get(primary_path, {}).get("lines"):
         n, seg = paths[primary_path]["lines"][0]
         line = (n, seg, True)
     else:
         cands = _lines(segs)
         for n, seg, _ in cands:
-            tied = (primary_path and primary_path in seg) or (primary_sym and primary_sym in seg)
+            tied = (primary_path and primary_path in seg) or _word_in(primary_sym, seg)
             if tied:
                 line = (n, seg, True)
                 break
@@ -240,7 +276,8 @@ def extract_prose(text):
     # version / tag
     tag = header.get("version")
     if tag:
-        claims.append({"type": "tag", "value": tag, "span": _span_for(segs, tag), "role": "supporting"})
+        claims.append({"type": "tag", "value": tag, "span": _span_for(segs, hspans["version"]),
+                       "role": "supporting"})
     else:
         tags = _tags(segs)
         if tags:

@@ -57,11 +57,12 @@ def _run(ws, L, tool, args):
     return L.add(tool, args, run_tool(ws, tool, args), by="skeptic")
 
 
-def _rule_checks(ws, L, claims):
-    """Deterministic objections. Returns a list of {rule, text, cites}."""
+def _rule_checks(ws, L, claims, ref=None):
+    """Deterministic objections. Returns a list of {rule, text, cites}. `ref` is the ref the caller
+    resolved (the agent passes its own); otherwise the first resolved tag in the ledger."""
     objections = []
     sym, path = _primary(claims, "symbol"), _primary(claims, "path")
-    ref = _resolved_ref(L)
+    ref = ref or _resolved_ref(L)
 
     sym_rows = _done(L.find("find_symbol", name=sym)) if sym else []
     path_rows = _done(L.find("check_path", path=path)) if path else []
@@ -214,7 +215,14 @@ def skeptic_pass(ws, L, claims, proposed, injection=(), backend=None,
 
 
 def skeptic(report_text, ledger, claims, ws, ref, same_model=False, backend=None):
-    """Hook called by agent.finalize() for a HALLUCINATED verdict. -> dict with "verdict".
+    """Hook called by agent.finalize() for a HALLUCINATED verdict.
+
+    -> {"verdict", "confidence", "objections", "rows", "model_calls", "tokens"}
+
+    Steps: the rule checks (at the agent's resolved `ref`), then the optional model checks, then the
+    deterministic verdict is re-run on the extended ledger: if the skeptic's own tool rows move it
+    off HALLUCINATED, that counts as a binding objection too. The verdict is UNVERIFIED if any
+    binding objection exists, else HALLUCINATED (upheld). Never an upgrade.
 
     The skeptic model is chosen from the environment: SKEPTIC_API_KEY / SKEPTIC_BASE_URL /
     SKEPTIC_MODEL for the cross-model skeptic (Milestone 1: a different family from the planner),
@@ -222,8 +230,11 @@ def skeptic(report_text, ledger, claims, ws, ref, same_model=False, backend=None
     runs its deterministic rule checks only. report_text is not shown to the model."""
     if backend is None:
         backend = _env_backend("XAI" if same_model else "SKEPTIC")
+    client = getattr(backend, "client", None)
+    calls0, tok0 = getattr(client, "calls", 0), getattr(client, "tokens", 0)
     n0 = len(ledger.rows)
-    objections = _rule_checks(ws, ledger, claims)
+    before = verifier.deterministic_verdict(ledger, claims, [])["verdict"]
+    objections = _rule_checks(ws, ledger, claims, ref)
     if backend is not None:
         proposed = {"verdict": "HALLUCINATED", "reasons": []}
         objections += _model_checks(ws, ledger, claims, proposed, backend, MAX_MODEL_CHECKS)[0]
@@ -232,18 +243,40 @@ def skeptic(report_text, ledger, claims, ws, ref, same_model=False, backend=None
             if r["tool"] == "find_symbol" and r["args"].get("name") == sym and r["status"] == "DEFINED":
                 objections.append({"rule": "model_check", "cites": [r["id"]],
                                    "text": "skeptic check found '%s' DEFINED" % sym})
+    new_rows = ledger.rows[n0:]
+    if new_rows and before == "HALLUCINATED":
+        after = verifier.deterministic_verdict(ledger, claims, [])
+        if after["verdict"] != "HALLUCINATED":
+            objections.append({"rule": "readjudicated", "cites": [r["id"] for r in new_rows],
+                               "text": "with the skeptic's checks added, the rule adjudicator no longer "
+                                       "finds HALLUCINATED: " + "; ".join(after["reasons"][:1])})
     binding = [o for o in objections if not o.get("advisory")]
-    return {"verdict": "UNVERIFIED" if binding else "HALLUCINATED", "objections": objections,
-            "rows": [r["id"] for r in ledger.rows[n0:]]}
+    return {"verdict": "UNVERIFIED" if binding else "HALLUCINATED",
+            "confidence": 0.5 if binding else None,
+            "objections": objections, "rows": [r["id"] for r in new_rows],
+            "model_calls": getattr(client, "calls", 0) - calls0,
+            "tokens": getattr(client, "tokens", 0) - tok0}
+
+
+_BACKENDS = {}
+DEFAULT_BASE = {"XAI": "https://api.x.ai/v1"}
 
 
 def _env_backend(prefix):
+    """One cached backend per endpoint for the whole run, so the call cap is global, replies are cached
+    on disk like the planner's, and a missing key simply means rules only."""
     import os
-    if not os.environ.get(prefix + "_API_KEY"):
-        return None
-    try:
-        from .llm import LLMBackend, OpenAICompatClient
-        client = OpenAICompatClient.from_env(prefix)
-        return LLMBackend(client, prefix.lower()) if client else None
-    except Exception:  # noqa: BLE001
-        return None
+    if prefix in _BACKENDS:
+        return _BACKENDS[prefix]
+    backend = None
+    if os.environ.get(prefix + "_API_KEY"):
+        try:
+            from .llm import LLMBackend, OpenAICompatClient
+            client = OpenAICompatClient.from_env(prefix, DEFAULT_BASE.get(prefix), ".slopgate_cache")
+            client.max_calls = int(os.environ.get("SLOPGATE_SKEPTIC_MAX_CALLS",
+                                                  os.environ.get("SLOPGATE_MAX_MODEL_CALLS", "1000")))
+            backend = LLMBackend(client, prefix.lower() + "-skeptic")
+        except Exception:  # noqa: BLE001  (misconfigured endpoint: rules only, never a crash)
+            backend = None
+    _BACKENDS[prefix] = backend
+    return backend

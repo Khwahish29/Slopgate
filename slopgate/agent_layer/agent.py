@@ -527,7 +527,7 @@ def finalize(proposed, rationale, ledger, claims, meta, injection, config, repor
 
     verdict, text = None, rationale
     hook = None
-    skeptic_rows = []
+    skeptic_rows, skeptic_info = [], None
     if proposed is not None and config.use_citation_check:
         hook, found = _call_hook("citation_verifier", "verify_and_adjudicate")
         if not found:
@@ -591,6 +591,9 @@ def finalize(proposed, rationale, ledger, claims, meta, injection, config, repor
                 n0 = len(sl.rows)
                 res = fn(report_text, sl, claims, ws, ref, **kw)
                 skeptic_rows = sl.rows[n0:]
+                if isinstance(res, dict):
+                    skeptic_info = {"objections": res.get("objections", []),
+                                    "model_calls": res.get("model_calls", 0), "tokens": res.get("tokens", 0)}
                 if isinstance(res, dict) and res.get("objections"):
                     events.append("skeptic objections: " + "; ".join(o.get("rule", "?") for o in res["objections"]))
                 v = res[0] if isinstance(res, (tuple, list)) and res else (res.get("verdict") if isinstance(res, dict) else res)
@@ -604,7 +607,7 @@ def finalize(proposed, rationale, ledger, claims, meta, injection, config, repor
                 verdict = "UNVERIFIED"
     conf = det["confidence"] if verdict == det_v else 0.5
     return {"verdict": verdict, "rationale": text, "events": events, "confidence": conf,
-            "skeptic_rows": skeptic_rows}
+            "skeptic_rows": skeptic_rows, "skeptic": skeptic_info}
 
 
 # --------------------------------------------------------------------------- the system
@@ -784,7 +787,7 @@ class Agent(System):
         summary = {"step": "final", "stop_reason": stop, "claim_states": states,
                    "proposed_verdict": proposed, "final_verdict": fin["verdict"],
                    "verdict_events": verdict_events, "finalize_events": fin["events"],
-                   "skeptic_rows": fin.get("skeptic_rows", []),
+                   "skeptic_rows": fin.get("skeptic_rows", []), "skeptic": fin.get("skeptic"),
                    "proposed_rationale": rationale, "verdict_raw_replies": verdict_raw,
                    "pair_states": pair_states(claims, L, meta, na, ref),
                    "budget": budget.snapshot(),
@@ -804,6 +807,8 @@ class Agent(System):
                 "ledger": L.dump(), "trace": trace,
                 "stop_reason": stop, "proposed_verdict": proposed, "claim_states": states,
                 "skeptic_tool_calls": len(fin.get("skeptic_rows", [])),
+                "skeptic_model_calls": (fin.get("skeptic") or {}).get("model_calls", 0),
+                "skeptic_tokens": (fin.get("skeptic") or {}).get("tokens", 0),
                 "pair_states": pair_states(claims, L, meta, na, ref),
                 "cost_usd": round(budget.cost_usd, 6), "trace_file": trace_file,
                 "throttled_calls": tc.throttled_calls, "throttle_wait_s": round(tc.throttle_wait_s, 3),

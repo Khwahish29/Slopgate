@@ -85,5 +85,45 @@ class Prose(unittest.TestCase):
         self.assertEqual(ProseRuleBackend().extract(PROSE), extract_prose(PROSE))
 
 
+    # ---- fixes found on D1 / D3 ------------------------------------------------------------
+
+    def test_generic_bullet_fields(self):
+        # the "slop" style: no "**Affected line:**", just bullet fields
+        text = ("# Security Advisory: overflow in hdr_parse_line()\n\n## Technical Details\n\n"
+                "- **Component:** `lib/hdr.c`\n- **Function:** `hdr_parse_line()`\n- **Line:** 28\n\n"
+                "Affected versions: v1.0\n")
+        c = self.check(text)
+        self.assertEqual((lb(c, "symbol"), lb(c, "path"), lb(c, "line")), ("hdr_parse_line", "lib/hdr.c", 28))
+        self.assertEqual([x["value"] for x in c if x["type"] == "tag"], ["v1.0"])
+
+    def test_docs_paths_are_paths(self):
+        text = "The name cfg_watch_reload() is documented in docs/README.md but never defined."
+        self.assertIn("docs/README.md", [x["value"] for x in self.check(text) if x["type"] == "path"])
+
+    def test_invented_support_does_not_take_the_primary_path(self):
+        # D3 invented_support: a fake helper named after the real function, in a fake test file
+        text = ("# Heap overflow in buf_append()\n\nI found a memory-safety problem in `buf_append()`. "
+                "The faulty statement is at lib/buf.c:33.\n\n## Additional analysis\n\nOur scanner also "
+                "flagged `buf_append_secure_wrapper()` in `tests/fuzz/fuzz_buf_append.c` as part of the flow.")
+        c = self.check(text)
+        self.assertEqual(lb(c, "symbol"), "buf_append")
+        self.assertEqual(lb(c, "path"), "lib/buf.c")
+        self.assertEqual(lb(c, "line"), 33)
+
+    def test_test_dirs_lose_ties(self):
+        text = "The overflow in parse_rec() is reachable from tests/run_parse.c and from src/parse.c."
+        self.assertEqual(lb(self.check(text), "path"), "src/parse.c")
+
+    def test_d1_every_style_exact(self):
+        p = os.path.join(ROOT, "corpus", "d1", "d1.jsonl")
+        if not os.path.exists(p):
+            self.skipTest("build D1 first: python -m slopgate.datasets.d1")
+        for line in open(p):
+            it = json.loads(line)
+            clean, _ = ex.sanitize(it["report"])
+            c, want = self.check(clean), it["claimed"]
+            got = {"symbol": lb(c, "symbol"), "path": lb(c, "path"), "line": lb(c, "line")}
+            self.assertEqual(got, {k: want.get(k) for k in got}, it["id"])
+
 if __name__ == "__main__":
     unittest.main()
