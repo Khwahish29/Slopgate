@@ -9,15 +9,16 @@ on:
 jobs:
   test:
     name: tests (${{ matrix.parser }})
-    runs-on: ubuntu-24.04   # ubuntu-latest (26.04) has no Python 3.9 build
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - parser: regex          # standard library only, as most of the team runs it
+          - parser: regex
             install: false
-          - parser: tree-sitter    # with the optional parser from requirements.txt
+          - parser: tree-sitter
             install: true
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,3 +32,52 @@ jobs:
 
       - name: Run tests
         run: python -W ignore -m unittest discover -s tests -v
+
+  reproduce:
+    name: Offline evaluation reproduction
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run reproducible evaluation
+        run: make reproduce
+
+      - name: Verify output artifacts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path("results/reproduction")
+
+          for dataset in ("d1", "d3", "d4"):
+              folder = root / dataset
+
+              for system in ("b0", "b1"):
+                  assert (folder / f"{system}_metrics.json").is_file()
+                  assert (folder / f"{system}_predictions.jsonl").is_file()
+
+              assert (folder / "comparison" / "comparison.json").is_file()
+              assert (folder / "cost" / "cost_summary.json").is_file()
+
+              if dataset in ("d3", "d4"):
+                  assert (folder / "review.json").is_file()
+
+          print("All reproduction artifacts verified.")
+          PY
+
+      - name: Upload reproduction artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slopgate-reproduction
+          path: results/reproduction/
+          if-no-files-found: warn
