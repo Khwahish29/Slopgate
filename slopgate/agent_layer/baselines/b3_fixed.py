@@ -1,26 +1,29 @@
 """B3: fixed pipeline. Extract, then EVERY tool on EVERY claim in a fixed order, then the
 rule adjudicator decides. No planning, no stopping rule, no skeptic, no proposer.
 
-Isolates the value of planning and stopping, apart from reading. b3_rules extracts with
-the rule extractor; b3_llm extracts with Grok (needs a key)."""
+Isolates the value of planning and stopping, apart from reading. b3_rules reads with the same
+prose rule extractor as B1, so B1 vs B3 differs only in how much is checked; b3_llm reads with a
+model (any OpenAI-compatible endpoint, set by XAI_*; needs a key). A model's claims must pass
+llm.validate_claims; if it fails twice the rule extractor takes over, and the record says so."""
 import os
 import time
 
 from .. import extract, verifier
 from ..ledger import Ledger
-from ..llm import LLMBackend, ModelError, OpenAICompatClient, RuleBackend, validate_claims
+from ..llm import LLMBackend, ModelError, OpenAICompatClient, validate_claims
+from ..prose_extract import ProseRuleBackend
 from ..tools import run_tool
 from .base import Skipped, System, register
 
 
-FLOOR = RuleBackend()
+FLOOR = ProseRuleBackend()                      # the reader B1 uses; also the fallback when a model fails
 GOOD = {"DEFINED", "EXISTS", "LOCATED", "IN_RANGE", "FOUND", "REACHABLE"}
 
 
 def extract_claims(clean, backend, trace):
     """Model extraction with the verbatim-span rule; two schema failures -> regex floor."""
     discarded, failures = [], 0
-    if backend.name != "rules":
+    if isinstance(backend, LLMBackend):
         while failures < 2:
             try:
                 raw = backend.extract(clean)
@@ -85,6 +88,7 @@ class _B3(System):
         clean, injection = extract.sanitize(raw)
         client = getattr(self.backend, "client", None)
         tok0, calls0 = getattr(client, "tokens", 0), getattr(client, "calls", 0)
+        retries0, limited0 = getattr(client, "retries", 0), getattr(client, "rate_limited", 0)
         trace = []
         claims, discarded = extract_claims(clean, self.backend, trace)
         source = next((t.get("source") for t in reversed(trace) if t.get("step") == "extract" and "source" in t), "?")
@@ -101,6 +105,9 @@ class _B3(System):
                 "confidence": det["confidence"], "tool_calls": len(L.rows),
                 "tokens": getattr(client, "tokens", 0) - tok0,
                 "model_calls": getattr(client, "calls", 0) - calls0,
+                "model_errors": sum(1 for t in trace if t.get("step") == "extract" and "error" in t),
+                "retries": getattr(client, "retries", 0) - retries0,
+                "rate_limited": getattr(client, "rate_limited", 0) - limited0,
                 "extraction": "floor" if "floor" in str(source) else source,
                 "discarded_claims": len(discarded), "claims": claims,
                 "latency_s": time.time() - t0, "injection_flags": injection,
@@ -111,20 +118,21 @@ class _B3(System):
 
 @register("b3_rules")
 class FixedRules(_B3):
-    description = "B3 fixed pipeline (rule extractor, all tools, rule adjudicator)"
+    description = "B3 fixed pipeline (prose rule extractor, all tools, rule adjudicator)"
 
     def __init__(self, env=None):
-        self.backend = RuleBackend()
+        self.backend = ProseRuleBackend()
 
 
 @register("b3_llm", needs_llm=True)
 class FixedLLM(_B3):
-    description = "B3 fixed pipeline (Grok extractor, all tools, rule adjudicator)"
+    description = "B3 fixed pipeline (LLM extractor, all tools, rule adjudicator)"
 
     def __init__(self, env=None):
         try:
             client = OpenAICompatClient.from_env("XAI", "https://api.x.ai/v1", ".slopgate_cache")
             client.max_calls = int(os.environ.get("SLOPGATE_MAX_MODEL_CALLS", "1000"))
-            self.backend = LLMBackend(client, "grok")
+            self.backend = LLMBackend(client, client.model)
+            self.description = "B3 fixed pipeline (%s extractor, all tools, rule adjudicator)" % client.model
         except Exception as e:  # noqa: BLE001
             raise Skipped(str(e))
