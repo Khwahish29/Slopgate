@@ -2,7 +2,7 @@ PYTHON ?= python
 RESULTS ?= results/reproduction
 SYSTEMS ?= b0 b1
 
-.PHONY: help test datasets evaluate aggregate cost review reproduce clean-results
+.PHONY: help test datasets evaluate aggregate cost review figures sandbox-image reproduce clean-results
 
 help:
 	@echo "SlopGate evaluation commands:"
@@ -12,6 +12,8 @@ help:
 	@echo "  make aggregate     Aggregate evaluation predictions"
 	@echo "  make cost          Generate cost summaries"
 	@echo "  make review        Export D3/D4 review summaries"
+	@echo "  make figures       Draw SVG charts from the aggregated results"
+	@echo "  make sandbox-image Build the reproduction sandbox Docker image"
 	@echo "  make reproduce     Run the complete offline workflow"
 	@echo "  make clean-results Remove reproduction outputs"
 
@@ -57,6 +59,12 @@ review:
 			--limit 0 \
 			--export $(RESULTS)/$$dataset/review.json || exit $$?; \
 	done
+
+figures:
+	$(PYTHON) -m slopgate.evaluation.figures --results $(RESULTS) --out $(RESULTS)/figures
+
+sandbox-image:
+	$(PYTHON) -m sandbox.launcher --build
 
 reproduce: test datasets evaluate aggregate cost review
 	@echo "===== REPRODUCTION COMPLETE ====="
