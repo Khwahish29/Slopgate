@@ -1,0 +1,20 @@
+{"annotator": "pilot", "spec": "corpus/d2/d2_pilot.json", "labels": [
+  {"id": "d2-h1-2298307", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-3392174", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-2887487", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-2819666", "gold": "HALLUCINATED"},
+  {"id": "d2-h1-2990139", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-3418528", "gold": "HALLUCINATED"},
+  {"id": "d2-h1-3473182", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-3459636", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-3117697", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-3516202", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-3516186", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-3462525", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-h1-3466883", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-cve-2023-38545", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-cve-2024-6197", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-cve-2024-7264", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-cve-2021-22898", "gold": "NOT_HALLUCINATED"},
+  {"id": "d2-cve-2024-2398", "gold": "NOT_HALLUCINATED"}
+]}
