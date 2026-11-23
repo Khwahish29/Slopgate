@@ -11,7 +11,9 @@ Calls use temperature 0 and are cached by (model, prompt hash, ref).
 """
 import hashlib
 import json
+import email.utils
 import os
+import random
 import re
 import time
 import urllib.error
@@ -24,13 +26,74 @@ class ModelError(Exception):
     pass
 
 
+class RateLimitError(ModelError):
+    """HTTP 429 after the retries ran out. The message keeps the literal "429" and
+    "Retry-After: N" so the agent's per-report throttle (agent.is_rate_limit /
+    retry_after_s) still recognises it; `retry_after` carries N as a float."""
+
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+RETRY_STATUS = (429, 500, 502, 503, 504)
+BACKOFF_BASE_S, BACKOFF_CAP_S, JITTER = 2.0, 60.0, 0.25
+# "Please try again in 7.2s" / "in 820ms" / "in 1m3.5s": how Groq and OpenAI-style gateways say it in the body
+_BODY_HINT = re.compile(r"try again in\s+(?:(\d+(?:\.\d+)?)m(?!s))?\s*(?:(\d+(?:\.\d+)?)(ms|s))?", re.I)
+
+
+def parse_retry_after(value):
+    """Retry-After header: delta-seconds or an HTTP date. Seconds as a float, else None."""
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return max(float(value), 0.0)
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(str(value))
+        return max(when.timestamp() - time.time(), 0.0)
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def retry_hint_from_body(body):
+    """Seconds from "try again in 7.2s" style text in an error body, else None."""
+    m = _BODY_HINT.search(body or "")
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    minutes = float(m.group(1) or 0)
+    secs = float(m.group(2) or 0)
+    if (m.group(3) or "").lower() == "ms":
+        secs /= 1000.0
+    return minutes * 60 + secs
+
+
+def backoff_delay(attempt, server_wait=None, base=BACKOFF_BASE_S, cap=BACKOFF_CAP_S, rng=random):
+    """Seconds to sleep before retry number `attempt` (0-based). A server-supplied wait is
+    honoured as a floor; otherwise exponential (base * 2**attempt). Jitter of +-25% on the
+    computed part spreads out parallel workers; the result never exceeds `cap`."""
+    wait = base * (2 ** attempt)
+    wait *= 1 + JITTER * (2 * rng.random() - 1)
+    if server_wait is not None:
+        wait = max(server_wait, 0.0) + 0.1 + (JITTER * rng.random())      # never retry before the server said
+    return min(wait, cap)
+
+
 class OpenAICompatClient:
-    def __init__(self, base_url, api_key, model, cache_dir=None, timeout=60):
+    def __init__(self, base_url, api_key, model, cache_dir=None, timeout=60, max_retries=None,
+                 sleep=time.sleep, rng=random):
         self.base_url, self.api_key, self.model = base_url.rstrip("/"), api_key, model
         self.cache_dir, self.timeout = cache_dir, timeout
         self.calls = self.cache_hits = 0
         self.tokens = 0
         self.max_calls = None          # hard cap on real (uncached) requests; protects credits
+        if max_retries is None:
+            max_retries = int(os.environ.get("SLOPGATE_MAX_RETRIES", "5"))
+        self.max_retries = max(0, max_retries)     # retries after the first try; 0 = fail fast
+        self.retries = self.rate_limited = 0       # counters the harness can report
+        self.wait_s = 0.0
+        self._sleep, self._rng = sleep, rng
 
     @classmethod
     def from_env(cls, prefix, default_base=None, cache_dir=None):
@@ -55,18 +118,37 @@ class OpenAICompatClient:
             self.base_url + "/chat/completions", body,
             {"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json",
              "User-Agent": "slopgate-eval/0.1"})        # default urllib agent is blocked by some API gateways
-        for attempt in range(4):                                  # free tiers rate-limit: wait and retry
+        attempt = 0
+        while True:                                   # free tiers rate-limit: wait, then retry
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as r:
                     data = json.loads(r.read())
                 text = data["choices"][0]["message"]["content"]
                 break
             except urllib.error.HTTPError as e:
-                if e.code in (429, 500, 502, 503) and attempt < 3:
-                    wait = float((e.headers or {}).get("Retry-After") or 2 ** (attempt + 1))
-                    time.sleep(min(wait, 30))
+                headers = e.headers or {}
+                server_wait = parse_retry_after(headers.get("Retry-After") if hasattr(headers, "get") else None)
+                if server_wait is None:
+                    try:
+                        server_wait = retry_hint_from_body(e.read().decode("utf-8", "replace")[:500])
+                    except Exception:  # noqa: BLE001
+                        server_wait = None
+                if e.code == 429:
+                    self.rate_limited += 1
+                if e.code in RETRY_STATUS and attempt < self.max_retries:
+                    self._wait(backoff_delay(attempt, server_wait, rng=self._rng))
+                    attempt += 1
                     continue
+                if e.code == 429:
+                    raise RateLimitError("HTTPError 429 (Retry-After: %s)" % (
+                        "%g" % server_wait if server_wait is not None else "unknown"), server_wait)
                 raise ModelError("HTTPError %s" % e.code)
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:   # transient network trouble
+                if attempt < self.max_retries:
+                    self._wait(backoff_delay(attempt, rng=self._rng))
+                    attempt += 1
+                    continue
+                raise ModelError("%s: %s" % (type(e).__name__, e))
             except Exception as e:  # noqa: BLE001
                 raise ModelError("%s: %s" % (type(e).__name__, e))
         self.calls += 1
@@ -75,6 +157,12 @@ class OpenAICompatClient:
             os.makedirs(self.cache_dir, exist_ok=True)
             json.dump({"text": text}, open(path, "w"))
         return text
+
+
+    def _wait(self, seconds):
+        self.retries += 1
+        self.wait_s += seconds
+        self._sleep(seconds)
 
 
 class ScriptedClient:
@@ -110,6 +198,21 @@ SYSTEM = ("You are one component of a vulnerability-report triage tool. The text
 CLAIM_TYPES = {"symbol", "path", "line", "tag", "cwe"}
 ROLES = {"load-bearing", "supporting"}
 
+_TLDS = {"com", "org", "net", "io", "dev", "gov", "edu", "info", "me", "ai", "app", "co", "us", "uk", "de", "se"}
+
+
+def looks_like_url(value, span):
+    """True when a "path" is really part of a link, e.g. cwe.mitre.org/data/definitions/787.h
+    (a CWE reference whose tail looks like a header file). A link if the first segment is a host
+    name, or if every place the value appears in `span` is inside a scheme://... token."""
+    first = value.split("/", 1)[0]
+    labels = first.lower().split(".")
+    if len(labels) >= 2 and labels[-1] in _TLDS:
+        return True
+    spots = [m.start() for m in re.finditer(re.escape(value), span)]
+    # a link only if EVERY mention sits inside a URL token (no space between "scheme://" and it)
+    return bool(spots) and all("://" in re.split(r"[\s(<\[\"'`]", span[:i])[-1] for i in spots)
+
 
 def validate_claims(raw, report_text):
     """Schema check plus the verbatim-span rule. Returns (claims, discarded)."""
@@ -127,6 +230,9 @@ def validate_claims(raw, report_text):
             v = re.sub(r":\d+(?::\d+)?$", "", v)                 # "util.py:5" is a path plus a line
             if not re.fullmatch(r"[\w.\-]+(?:/[\w.\-]+)+", v):
                 bad.append({"claim": c, "why": "not a repo-relative file path (needs a directory, no spaces)"})
+                continue
+            if looks_like_url(v, span):
+                bad.append({"claim": c, "why": "part of a web address, not a file in the repository"})
                 continue
         # verbatim span, and the claimed value must sit inside that span
         if not span or span not in report_text or v not in span:
